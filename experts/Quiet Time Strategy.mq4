@@ -61,6 +61,15 @@ int start()
 
 void RunTests()
 {
+   int totalTests = 0;
+   int testsPassed = 0;
+   
+   Print("Beginning Unit Tests");
+   // Run the individual tests
+   
+   Print("Completed tests. ", testsPassed, " of ", totalTests, " passed.");
+   
+ 
 }
 
 
