@@ -124,7 +124,13 @@ void CalculateBrokerTimes()
    Print (TimeToStr(localStart), " ", TimeToStr(localEnd), " " , TimeToStr(localTerm));
    Print ("ServerOffsetFromLocal =", serverOffsetFromLocal);
    if (serverOffsetFromLocal == 0) 
+   {
       serverOffsetFromLocal = FindServerOffset();
+      if (serverOffsetFromLocal == -1 && Testing)
+      {
+         serverOffsetFromLocal = 0;
+      }
+   }
    brokerQTStart = localStart + serverOffsetFromLocal;
    brokerQTEnd = localEnd + serverOffsetFromLocal;
    brokerQTTerminate = localTerm + serverOffsetFromLocal;
@@ -132,6 +138,7 @@ void CalculateBrokerTimes()
 
 bool CanCalculateBrokerStartTime()
 {
+   Print("Starting CanCalculateBrokerStartTime()");
    CalculateBrokerTimes();
    return (Assert(TimeToStr(brokerQTStart, TIME_MINUTES) == "15:00", "Wrong start time"));   
 }
