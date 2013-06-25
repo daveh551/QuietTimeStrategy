@@ -24,7 +24,8 @@ double QuietTimeEntryPrice;   // The bid price at the start of quiet time.
 datetime brokerQTStart;       // The Quiet Time startTime in broker timezone
 datetime brokerQTEnd;
 datetime brokerQTTerminate;
-int serverOffsetFromLocal = 0;
+int serverOffsetFromLocal = -1;
+datetime serverFirstBar = 0;
 //+------------------------------------------------------------------+
 //| expert initialization function                                   |
 //+------------------------------------------------------------------+
@@ -44,7 +45,8 @@ int init()
 int deinit()
   {
 //----
-      serverOffsetFromLocal = 0;
+      serverOffsetFromLocal = -1;
+      serverFirstBar = 0;
 //----
    return(0);
   }
@@ -53,10 +55,16 @@ int deinit()
 //+------------------------------------------------------------------+
 int start()
   {
+   if (serverOffsetFromLocal == -1)
+   {
+      CalculateBrokerTimes();   
+   }
+   if (serverOffsetFromLocal == -1) return (0);
 //----
-   if (TradesOpen() > 0 && CheckOpenTrade()) return(0);
+   if (TradesOpen() > 0)
+      if (ManageOpenTrade()) return(0);
       
-   if (!TimeWindowToTrade(TimeCurrent())) return (0);
+   if (!TimeWindowToTrade(iTime(NULL, PERIOD_M1, 0))) return (0);
    if (QuietTimeEntryPrice == 0.00)
    {
       QuietTimeEntryPrice = GetQuietTimeEntryPrice();
@@ -81,6 +89,24 @@ void RunTests()
    if (CanCalculateBrokerStartTime())
       testsPassed++;
    totalTests++;
+   if (CanCalculateBrokerEndTime())
+      testsPassed++;
+   totalTests++;  
+   if (CanCalculateBrokerTermTime())
+      testsPassed++;
+   totalTests++;  
+   if (BeforeWindowReturnsFalse())
+      testsPassed++;
+   totalTests++;
+   if (InWindowReturnsTrue())
+      testsPassed++;
+   totalTests++;
+   if (AfterWindowReturnsFalse())
+      testsPassed++;
+   totalTests++;
+   if (AfterTermBumpsWindowTimes())
+      testsPassed++;
+   totalTests++;
    
    Print("Completed tests. ", testsPassed, " of ", totalTests, " passed.");
    
@@ -91,7 +117,16 @@ void RunTests()
 
 bool TimeWindowToTrade(datetime time)
 {
-   return (false);
+   //Print("time param = ", TimeToStr(time), " Start = ", TimeToStr(brokerQTStart), " End= ", TimeToStr(brokerQTEnd));
+   bool result = ((time >= brokerQTStart) && (time <= brokerQTEnd));
+   if (time > brokerQTTerminate)
+   {
+      // Advance window times for next day's trading
+      brokerQTStart += 86400;
+      brokerQTEnd += 86400; 
+      brokerQTTerminate += 86400;
+   }
+   return (result);
 }
 
 double GetQuietTimeEntryPrice()
@@ -110,6 +145,11 @@ void PlaceTrade(int tradeType, string symbol)
 
 void CalculateBrokerTimes()
 {
+   if (serverOffsetFromLocal == -1) 
+   {
+      serverOffsetFromLocal = FindServerOffset();
+   }
+   if (serverOffsetFromLocal == -1) return;
    datetime localNow = TimeLocal();
    string localDateString = TimeToStr(localNow, TIME_DATE);
    string localStartString = StringConcatenate(localDateString, " " , QuietTimeStart);
@@ -121,26 +161,47 @@ void CalculateBrokerTimes()
    datetime localTerm = StrToTime(localTermString);
    if (localEnd < localStart) localEnd += 86400;
    if (localTerm < localEnd) localTerm += 86400;
-   Print (TimeToStr(localStart), " ", TimeToStr(localEnd), " " , TimeToStr(localTerm));
-   Print ("ServerOffsetFromLocal =", serverOffsetFromLocal);
-   if (serverOffsetFromLocal == 0) 
-   {
-      serverOffsetFromLocal = FindServerOffset();
-      if (serverOffsetFromLocal == -1 && Testing)
-      {
-         serverOffsetFromLocal = 0;
-      }
-   }
    brokerQTStart = localStart + serverOffsetFromLocal;
    brokerQTEnd = localEnd + serverOffsetFromLocal;
    brokerQTTerminate = localTerm + serverOffsetFromLocal;
+   Print (TimeToStr(brokerQTStart), " ", TimeToStr(brokerQTEnd), " " , TimeToStr(brokerQTTerminate));
 }
+
 
 bool CanCalculateBrokerStartTime()
 {
    Print("Starting CanCalculateBrokerStartTime()");
-   CalculateBrokerTimes();
+   SetupBrokerTestTimes();
    return (Assert(TimeToStr(brokerQTStart, TIME_MINUTES) == "15:00", "Wrong start time"));   
+}
+
+void SetupBrokerTestTimes()
+{
+   string saveQuietTimeStart = QuietTimeStart;
+   string saveQuietTimeEnd = QuietTimeEnd;
+   string saveQuietTimeTerminate = QuietTimeTerminate;
+   QuietTimeStart = "14:00";
+   QuietTimeEnd = "18:00";
+   QuietTimeTerminate = "01:00";
+   CalculateBrokerTimes();
+   QuietTimeStart = saveQuietTimeStart;
+   QuietTimeEnd = saveQuietTimeEnd;
+   QuietTimeTerminate = saveQuietTimeTerminate;
+}
+
+bool CanCalculateBrokerEndTime()
+{
+   Print("Starting CanCalculateBrokerEndTime()");
+   SetupBrokerTestTimes();
+   return (Assert(TimeToStr(brokerQTEnd, TIME_MINUTES) == "19:00", "Wrong end time"));   
+}
+
+bool CanCalculateBrokerTermTime()
+{
+   Print("Starting CanCalculateBrokerTermTime()");
+   SetupBrokerTestTimes();
+   Print("CanCalculateBrokerTermTime. brokerQTTerminate= ", TimeToStr(brokerQTTerminate, TIME_MINUTES));
+   return (Assert(TimeToStr(brokerQTTerminate, TIME_MINUTES) == "02:00", "Wrong termination time"));   
 }
 
 bool TradesOpen()
@@ -148,7 +209,7 @@ bool TradesOpen()
    return (false);
 }
 
-bool CheckOpenTrade()
+bool ManageOpenTrade()
 {
    return (false);
 }
@@ -156,33 +217,62 @@ bool CheckOpenTrade()
 int FindServerOffset()
 {
    Print("Entering FindServerOffset()");
-   if (WaitForNewBar())
+   if (Testing) return (3600); // an arbitrary number - anything will do for testing
+   if (serverFirstBar == 0)
    {
-      datetime localNow = TimeLocal();
-      datetime ServerNow = iTime(Symbol(), PERIOD_M1, 0);
-   
-
-      Print ("Local= ", TimeToStr(localNow), ", Server= ", TimeToStr(ServerNow));
-      return (ServerNow - localNow);
-   }
-   else
-   {
-      Alert("No new bar received in 60 seconds. Impossible to determine Server Offset");
+      serverFirstBar = iTime(Symbol(), PERIOD_M1, 0);
       return (-1);
    }
+   
+   datetime ServerNow = iTime(Symbol(), PERIOD_M1, 0);
+   if (ServerNow > serverFirstBar)
+   {
+      datetime localNow = (TimeLocal()/ 60) * 60;
+      Print ("Local= ", TimeToStr(localNow, TIME_SECONDS), ", Server= ", TimeToStr(ServerNow, TIME_SECONDS));
+      int serverOffset = ServerNow - localNow;
+      Print ("Server Offset= ", serverOffset);
+      return (serverOffset);
+   }
+   return (-1);
 }
 
-bool WaitForNewBar()
+//Time Window tests
+bool BeforeWindowReturnsFalse()
 {
-   // Wait for upto 60 seconds for a new 1 minute bar, then return.
-   datetime startTime = TimeLocal();
-   datetime startBar = iTime(Symbol(), PERIOD_M1, 0);
-   
-   while(true)
-   {
-      if (iTime(Symbol(), PERIOD_M1, 0) > startBar) return (true);
-      if (TimeLocal() > startTime + 60) return (false);
-   }
-   
+   Print ("Beginning BeforeWindowReturnsFalse()");
+   SetupBrokerTestTimes();
+   return (Assert(!TimeWindowToTrade(StrToTime(StringConcatenate(TimeToStr(TimeLocal(), TIME_DATE), " 10:00"))), "TimeToTradeWindow(10:00) returned true"));
    
 }
+
+bool InWindowReturnsTrue()
+{
+   Print ("Beginning InWindowReturnsTrue()");
+   SetupBrokerTestTimes();
+   return (Assert(TimeWindowToTrade(StrToTime(StringConcatenate(TimeToStr(TimeLocal(), TIME_DATE), " 16:00"))), "TimeToTradeWindow(16:00) returned false"));
+   
+}
+
+bool AfterWindowReturnsFalse()
+{
+   Print ("Beginning AfterWindowReturnsFalse()");
+   SetupBrokerTestTimes();
+   return (Assert(!TimeWindowToTrade(StrToTime(StringConcatenate(TimeToStr(TimeLocal(), TIME_DATE), " 20:00"))), "TimeToTradeWindow(20:00) returned true"));
+}
+
+bool AfterTermBumpsWindowTimes()
+{
+   Print ("Beginning AfterTermBumpsWindowTimes()");
+   SetupBrokerTestTimes();
+   datetime startingQTStart = brokerQTStart;
+   datetime startingQTEnd = brokerQTEnd;
+   datetime startingQTTerminate = brokerQTTerminate;
+   bool windowResult = TimeWindowToTrade(StrToTime(StringConcatenate(TimeToStr(TimeLocal() + 86400, TIME_DATE), " 03:00")));
+   return (Assert (!windowResult, "TimeToTrade after terminate returned true") &&
+      Assert (brokerQTStart == startingQTStart + 86400, "BrokerQTStart not bumped") &&
+      Assert (brokerQTEnd == startingQTEnd + 86400, "BrokerQTEnd not bumped") &&
+      Assert (brokerQTTerminate == startingQTTerminate + 86400, "BrokerQTTerminate not bumped"));
+    return (false); 
+}
+
+
