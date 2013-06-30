@@ -6,6 +6,7 @@
 #property copyright "Dave Hanna"
 #property link      "http://nohypeforexrobotreview.com"
 #include <Assert.mqh>
+#include <PcntTradeSize.mqh>
 //--- input parameters
 extern string  QuietTimeStart="15:00";
 extern string  QuietTimeEnd="19:00";
@@ -13,19 +14,25 @@ extern string  QuietTimeTerminate="02:00";
 extern bool    TradeSunday=false;
 extern bool    TradeFriday=false;
 extern int       TriggerPipsFromQTEntry=15;
-
+extern double  PercentRisk=1.0;
 extern int       StopLossPips=12;
-extern int       TargetPops=10;
+extern int       TargetPips=10;
 extern int       MaximumSpread=6;
+extern int       MagicNumber=123456;
+extern string    TradeComment="";
 extern bool      Testing=false;
 
 //Global variables
-double QuietTimeEntryPrice;   // The bid price at the start of quiet time.
+double QuietTimeEntryPrice = 0.00;   // The bid price at the start of quiet time.
+double HighTrigger;
+double LowTrigger;
 datetime brokerQTStart;       // The Quiet Time startTime in broker timezone
 datetime brokerQTEnd;
 datetime brokerQTTerminate;
 int serverOffsetFromLocal = -1;
 datetime serverFirstBar = 0;
+int openTicketNumbers[30];
+int Digit5 = 1;
 //+------------------------------------------------------------------+
 //| expert initialization function                                   |
 //+------------------------------------------------------------------+
@@ -35,6 +42,10 @@ int init()
    if (Testing)
       RunTests();
    CalculateBrokerTimes();
+   if (Digits == 5 || Digits == 3) 
+      Digit5 = 10;
+   else Digit5 = 1;
+   ClearTicketNumbers();
      
 //----
    return(0);
@@ -47,6 +58,8 @@ int deinit()
 //----
       serverOffsetFromLocal = -1;
       serverFirstBar = 0;
+      QuietTimeEntryPrice = 0.00;
+      ClearTicketNumbers();
 //----
    return(0);
   }
@@ -62,14 +75,20 @@ int start()
    if (serverOffsetFromLocal == -1) return (0);
 //----
    if (TradesOpen() > 0)
-      if (ManageOpenTrade()) return(0);
+      if (ManageOpenTrade(iTime(NULL, PERIOD_M1, 0))) return(0);
       
    if (!TimeWindowToTrade(iTime(NULL, PERIOD_M1, 0))) return (0);
    if (QuietTimeEntryPrice == 0.00)
    {
       QuietTimeEntryPrice = GetQuietTimeEntryPrice();
+      HighTrigger = QuietTimeEntryPrice + TriggerPipsFromQTEntry * Digit5 * Point;
+      LowTrigger = QuietTimeEntryPrice + TriggerPipsFromQTEntry * Digit5 * Point;
+      if (ObjectFind("TRADEWINDOW") == -1)
+      {
+         MakeTradeWindow(brokerQTStart,brokerQTEnd, LowTrigger, HighTrigger);
+      }
    }
-   int typeTrade = ShouldTrade();
+   int typeTrade = ShouldTrade(Bid, Ask);
    if (typeTrade == 0) return(0);
    PlaceTrade(typeTrade, Symbol());
 //----
@@ -131,17 +150,74 @@ bool TimeWindowToTrade(datetime time)
 
 double GetQuietTimeEntryPrice()
 {
-   return (1.0);
+   int barIndex = 0;
+   while(true)
+   {
+      if (iTime(NULL, PERIOD_M1,  barIndex) <= brokerQTStart)
+      {
+         return (iOpen(NULL, PERIOD_M1,barIndex));
+      }
+      barIndex++;
+   }
 }
 
-int ShouldTrade()
+int ShouldTrade(double bid, double ask)
 {
+   if (ask - bid > MaximumSpread * Digit5) return (0); // Spread is more than maximum;
+   if (ask <= LowTrigger) return (1); // execute Buy
+   if (bid >= HighTrigger) return (-1); // execute Sell
    return (0);
 }
 
 void PlaceTrade(int tradeType, string symbol)
 {
-}
+
+   double TP,SL,TradeSize;
+   int Ticket;
+   bool ModifyResult;
+
+   TradeSize = PcntTradeSize(Symbol(), StopLossPips, PercentRisk, 1, false, true);
+
+   int orderOp = OP_BUY;
+   double orderPrice = Ask;
+   double exitPrice = Bid;
+   color orderArrow = Blue;
+   if(tradeType == -1)  //Short Trade
+      {
+         orderOp = OP_SELL;
+         orderPrice = Bid;
+         exitPrice = Ask;
+         orderArrow = Red;
+       }
+       
+      TP = exitPrice + tradeType * (TargetPips / Digits);
+      SL = exitPrice  - tradeType * (StopLossPips / Digits);
+      while(IsTradeContextBusy())  //our loop for the busy trade context
+         Sleep(100);  //sleep for 100 ms and test the trade context again
+      RefreshRates();  //refreshing all the variables when the 
+                      //trade context is no longer busy
+      Ticket = OrderSend(Symbol(),orderOp,NormalizeDouble(TradeSize,2),
+                        NormalizeDouble(orderPrice,Digits),2.0,0.0,0.0,"Trade Comment",
+                        MagicNumber,orderArrow);
+      if(Ticket >= 0)
+         {
+         while(IsTradeContextBusy())
+            Sleep(100);
+         RefreshRates();
+         OrderSelect(Ticket,SELECT_BY_TICKET);
+         ModifyResult = OrderModify(Ticket,OrderOpenPrice(),
+                                    NormalizeDouble(SL,Digits),
+                                    NormalizeDouble(TP,Digits),0,orderArrow);
+         if(!ModifyResult)
+            Alert("Stop Loss and Take Profit not set on order ",Ticket);
+         }  //if(Ticket >= 0)
+      else
+         {
+         Alert("Trade Not Entered");
+         }  //else
+
+   } 
+
 
 void CalculateBrokerTimes()
 {
@@ -204,16 +280,50 @@ bool CanCalculateBrokerTermTime()
    return (Assert(TimeToStr(brokerQTTerminate, TIME_MINUTES) == "02:00", "Wrong termination time"));   
 }
 
-bool TradesOpen()
+int TradesOpen()
 { 
-   return (false);
+   int totalOrdersCount = OrdersTotal();
+   int ordersForThisSymbol = 0;
+   if (totalOrdersCount == 0) return (0);
+   for (int ix = 0; ix < totalOrdersCount; ix++)
+   {
+      if (OrderSelect(ix, SELECT_BY_POS, MODE_TRADES))
+      {
+         if (OrderSymbol() == Symbol())
+         {
+            openTicketNumbers[ordersForThisSymbol] = OrderTicket();
+            ordersForThisSymbol++;
+         }
+      }
+   }
+   return (ordersForThisSymbol);
 }
 
-bool ManageOpenTrade()
+bool ManageOpenTrade(datetime serverTime)
 {
-   return (false);
+   // For now, we're assuming Stop Loss and TP are set on the trade.
+   // All we have to worry about is closing the trade at QTTerminate
+   if (serverTime >= brokerQTTerminate)
+   {
+      CloseOpenOrders();
+      return (true);
+   }
+   return (false); // orders remain open, so don't attempt to enter a new one. 
 }
 
+void CloseOpenOrders()
+{
+   for (int ix= 0; openTicketNumbers[ix] > 0; ix++)
+   {
+      OrderSelect(openTicketNumbers[ix], SELECT_BY_TICKET);
+      double lotSize = OrderLots();
+      int orderType = OrderType();
+      double price = Bid;
+      if (orderType == OP_SELL)
+         price = Ask;
+      OrderClose(openTicketNumbers[ix], lotSize, price, 3, Red);
+   }
+}
 int FindServerOffset()
 {
    Print("Entering FindServerOffset()");
@@ -275,4 +385,15 @@ bool AfterTermBumpsWindowTimes()
     return (false); 
 }
 
+void MakeTradeWindow(datetime start, datetime end, double lowPrice, double HighPrice)
+{
+   ObjectCreate("TRADEWINDOW", OBJ_RECTANGLE, start, lowPrice, end, HighPrice);
+   ObjectSet("TRADEWINDOW", OBJPROP_COLOR, Blue);
+   ObjectSet("TRADEWINDOW", OBJPROP_BACK, true);
+}
 
+void ClearTicketNumbers()
+{
+   for (int ix=0; ix <= ArrayRange(openTicketNumbers, 0); ix++)
+      openTicketNumbers[ix] = 0;
+}
