@@ -221,6 +221,7 @@ void PlaceTrade(int tradeType, string symbol)
 
 void CalculateBrokerTimes()
 {
+   Print("Entering CalculateBrokerTimes(). serverOffsetFromLocal = ", serverOffsetFromLocal);
    if (serverOffsetFromLocal == -1) 
    {
       serverOffsetFromLocal = FindServerOffset();
@@ -284,7 +285,9 @@ int TradesOpen()
 { 
    int totalOrdersCount = OrdersTotal();
    int ordersForThisSymbol = 0;
+   
    if (totalOrdersCount == 0) return (0);
+   Print("Entering TradesOpen(). totalOrderCount = ", totalOrdersCount);
    for (int ix = 0; ix < totalOrdersCount; ix++)
    {
       if (OrderSelect(ix, SELECT_BY_POS, MODE_TRADES))
