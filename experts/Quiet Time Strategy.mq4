@@ -163,10 +163,17 @@ double GetQuietTimeEntryPrice()
 
 int ShouldTrade(double bid, double ask)
 {
-   if (ask - bid > MaximumSpread * Digit5) return (0); // Spread is more than maximum;
-   if (ask <= LowTrigger) return (1); // execute Buy
-   if (bid >= HighTrigger) return (-1); // execute Sell
-   return (0);
+
+   int result = 0;
+   if (Ask < LowTrigger) result = 1; // execute a Buy trade
+   if (Bid > HighTrigger) result = -1; // execute a Sell Trade
+   if ((ask -bid) > (MaximumSpread * Point)) 
+   {
+      Print("Would have executed a trade, but spread is too wide: ", ask-bid, ", Max spread=", MaximumSpread, ", Point=", DoubleToStr(Point, Digits));
+      result = 0;
+   }
+   return (result);
+
 }
 
 void PlaceTrade(int tradeType, string symbol)
@@ -178,24 +185,28 @@ void PlaceTrade(int tradeType, string symbol)
 
    TradeSize = PcntTradeSize(Symbol(), StopLossPips, PercentRisk, 1, false, true);
 
+      while(IsTradeContextBusy())  //our loop for the busy trade context
+         Sleep(100);  //sleep for 100 ms and test the trade context again
+      RefreshRates();  //refreshing all the variables when the 
+                      //trade context is no longer busy
    int orderOp = OP_BUY;
+   string printType = "BUY";
    double orderPrice = Ask;
    double exitPrice = Bid;
    color orderArrow = Blue;
    if(tradeType == -1)  //Short Trade
       {
          orderOp = OP_SELL;
+         printType = "SELL";
          orderPrice = Bid;
          exitPrice = Ask;
          orderArrow = Red;
        }
        
-      TP = exitPrice + tradeType * (TargetPips / Digits);
-      SL = exitPrice  - tradeType * (StopLossPips / Digits);
-      while(IsTradeContextBusy())  //our loop for the busy trade context
-         Sleep(100);  //sleep for 100 ms and test the trade context again
-      RefreshRates();  //refreshing all the variables when the 
-                      //trade context is no longer busy
+      TP = exitPrice + tradeType * (TargetPips / Point);
+      SL = exitPrice  - tradeType * (StopLossPips / Point);
+
+      Print("Entering ", printType, " order for ", DoubleToStr(TradeSize, 2), " lots of ",  Symbol(), " at ", DoubleToStr(orderPrice, Digits)); 
       Ticket = OrderSend(Symbol(),orderOp,NormalizeDouble(TradeSize,2),
                         NormalizeDouble(orderPrice,Digits),2.0,0.0,0.0,"Trade Comment",
                         MagicNumber,orderArrow);
@@ -208,6 +219,7 @@ void PlaceTrade(int tradeType, string symbol)
          ModifyResult = OrderModify(Ticket,OrderOpenPrice(),
                                     NormalizeDouble(SL,Digits),
                                     NormalizeDouble(TP,Digits),0,orderArrow);
+         Print("Modifying order for SL=", DoubleToStr(SL,Digits), ", TP=", DoubleToStr(TP, Digits));                                    
          if(!ModifyResult)
             Alert("Stop Loss and Take Profit not set on order ",Ticket);
          }  //if(Ticket >= 0)
@@ -394,9 +406,17 @@ bool AfterTermBumpsWindowTimes()
     return (false); 
 }
 
-void MakeTradeWindow(datetime start, datetime end, double lowPrice, double HighPrice)
+void MakeTradeWindow(datetime start, datetime end, double lowPrice, double highPrice)
 {
-   ObjectCreate("TRADEWINDOW", OBJ_RECTANGLE, 0, start, lowPrice, end, HighPrice);
+   if (ObjectFind("TRADEWINDOW") == -1)
+      ObjectCreate("TRADEWINDOW", OBJ_RECTANGLE, 0, start, lowPrice, end, highPrice);
+   else
+   {
+      ObjectSet("TRADEWINDOW", OBJPROP_TIME1, start);
+      ObjectSet("TRADEWINDOW", OBJPROP_TIME2, end);
+      ObjectSet("TRADEWINDOW", OBJPROP_PRICE1,  lowPrice);
+      ObjectSet("TRADEWINDOW", OBJPROP_PRICE2,  highPrice);
+   }
    ObjectSet("TRADEWINDOW", OBJPROP_COLOR, Blue);
    ObjectSet("TRADEWINDOW", OBJPROP_BACK, true);
 }
