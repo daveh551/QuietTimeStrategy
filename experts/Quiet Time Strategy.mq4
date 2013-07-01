@@ -290,15 +290,18 @@ int TradesOpen()
    Print("Entering TradesOpen(). totalOrderCount = ", totalOrdersCount);
    for (int ix = 0; ix < totalOrdersCount; ix++)
    {
+      Print("In Open Trades. Examining openOrder[", ix, "] Symbol=", Symbol(), ", OrderSymbol()=", OrderSymbol(), ", OrderTicket=", OrderTicket());
       if (OrderSelect(ix, SELECT_BY_POS, MODE_TRADES))
       {
          if (OrderSymbol() == Symbol())
          {
+            Print("Order is for active symbol ", Symbol(), ". ordersForThisSymol = ", ordersForThisSymbol);
             openTicketNumbers[ordersForThisSymbol] = OrderTicket();
             ordersForThisSymbol++;
          }
       }
    }
+   Print ("Returning ordersForThisSymbol = ", ordersForThisSymbol);
    return (ordersForThisSymbol);
 }
 
@@ -309,9 +312,9 @@ bool ManageOpenTrade(datetime serverTime)
    if (serverTime >= brokerQTTerminate)
    {
       CloseOpenOrders();
-      return (true);
+      return (false);
    }
-   return (false); // orders remain open, so don't attempt to enter a new one. 
+   return (true); // orders remain open, so don't attempt to enter a new one. 
 }
 
 void CloseOpenOrders()
@@ -333,11 +336,14 @@ int FindServerOffset()
    if (Testing) return (3600); // an arbitrary number - anything will do for testing
    if (serverFirstBar == 0)
    {
+
       serverFirstBar = iTime(Symbol(), PERIOD_M1, 0);
+      Print ("Set serverFirstBar to ", TimeToStr(serverFirstBar));
       return (-1);
    }
    
    datetime ServerNow = iTime(Symbol(), PERIOD_M1, 0);
+   Print("Comparing ServerNow to serverFirstBar. ServerNow =", TimeToStr(ServerNow));
    if (ServerNow > serverFirstBar)
    {
       datetime localNow = (TimeLocal()/ 60) * 60;
@@ -390,7 +396,7 @@ bool AfterTermBumpsWindowTimes()
 
 void MakeTradeWindow(datetime start, datetime end, double lowPrice, double HighPrice)
 {
-   ObjectCreate("TRADEWINDOW", OBJ_RECTANGLE, start, lowPrice, end, HighPrice);
+   ObjectCreate("TRADEWINDOW", OBJ_RECTANGLE, 0, start, lowPrice, end, HighPrice);
    ObjectSet("TRADEWINDOW", OBJPROP_COLOR, Blue);
    ObjectSet("TRADEWINDOW", OBJPROP_BACK, true);
 }
