@@ -60,6 +60,8 @@ int deinit()
       serverFirstBar = 0;
       QuietTimeEntryPrice = 0.00;
       ClearTicketNumbers();
+      if (ObjectFind("TRADEWINDOW") != -1)
+         ObjectDelete("TRADEWINDOW");
 //----
    return(0);
   }
@@ -82,12 +84,10 @@ int start()
    {
       QuietTimeEntryPrice = GetQuietTimeEntryPrice();
       HighTrigger = QuietTimeEntryPrice + TriggerPipsFromQTEntry * Digit5 * Point;
-      LowTrigger = QuietTimeEntryPrice + TriggerPipsFromQTEntry * Digit5 * Point;
-      if (ObjectFind("TRADEWINDOW") == -1)
-      {
-         MakeTradeWindow(brokerQTStart,brokerQTEnd, LowTrigger, HighTrigger);
-      }
-   }
+      LowTrigger = QuietTimeEntryPrice - TriggerPipsFromQTEntry * Digit5 * Point;
+      Print("QuietTimeEntryPrice = ", DoubleToStr(QuietTimeEntryPrice, Digits), ", HighTrigger= ", DoubleToStr(HighTrigger, Digits), ", LowTrigger= ", DoubleToStr(LowTrigger, Digits));
+          MakeTradeWindow(brokerQTStart,brokerQTEnd, LowTrigger, HighTrigger);
+    }
    int typeTrade = ShouldTrade(Bid, Ask);
    if (typeTrade == 0) return(0);
    PlaceTrade(typeTrade, Symbol());
@@ -167,7 +167,7 @@ int ShouldTrade(double bid, double ask)
    int result = 0;
    if (Ask < LowTrigger) result = 1; // execute a Buy trade
    if (Bid > HighTrigger) result = -1; // execute a Sell Trade
-   if ((ask -bid) > (MaximumSpread * Point)) 
+   if ((ask -bid) > (MaximumSpread * Digit5 * Point)) 
    {
       Print("Would have executed a trade, but spread is too wide: ", ask-bid, ", Max spread=", MaximumSpread, ", Point=", DoubleToStr(Point, Digits));
       result = 0;
@@ -203,8 +203,8 @@ void PlaceTrade(int tradeType, string symbol)
          orderArrow = Red;
        }
        
-      TP = exitPrice + tradeType * (TargetPips / Point);
-      SL = exitPrice  - tradeType * (StopLossPips / Point);
+      TP = exitPrice + tradeType * (TargetPips * Point);
+      SL = exitPrice  - tradeType * (StopLossPips * Point);
 
       Print("Entering ", printType, " order for ", DoubleToStr(TradeSize, 2), " lots of ",  Symbol(), " at ", DoubleToStr(orderPrice, Digits)); 
       Ticket = OrderSend(Symbol(),orderOp,NormalizeDouble(TradeSize,2),
@@ -299,21 +299,21 @@ int TradesOpen()
    int ordersForThisSymbol = 0;
    
    if (totalOrdersCount == 0) return (0);
-   Print("Entering TradesOpen(). totalOrderCount = ", totalOrdersCount);
+   //Print("Entering TradesOpen(). totalOrderCount = ", totalOrdersCount);
    for (int ix = 0; ix < totalOrdersCount; ix++)
    {
-      Print("In Open Trades. Examining openOrder[", ix, "] Symbol=", Symbol(), ", OrderSymbol()=", OrderSymbol(), ", OrderTicket=", OrderTicket());
+      //Print("In Open Trades. Examining openOrder[", ix, "] Symbol=", Symbol(), ", OrderSymbol()=", OrderSymbol(), ", OrderTicket=", OrderTicket());
       if (OrderSelect(ix, SELECT_BY_POS, MODE_TRADES))
       {
          if (OrderSymbol() == Symbol())
          {
-            Print("Order is for active symbol ", Symbol(), ". ordersForThisSymol = ", ordersForThisSymbol);
+            //Print("Order is for active symbol ", Symbol(), ". ordersForThisSymol = ", ordersForThisSymbol);
             openTicketNumbers[ordersForThisSymbol] = OrderTicket();
             ordersForThisSymbol++;
          }
       }
    }
-   Print ("Returning ordersForThisSymbol = ", ordersForThisSymbol);
+   //Print ("Returning ordersForThisSymbol = ", ordersForThisSymbol);
    return (ordersForThisSymbol);
 }
 
