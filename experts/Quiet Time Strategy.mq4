@@ -20,6 +20,7 @@ extern int       TargetPips=10;
 extern int       MaximumSpread=6;
 extern int       MagicNumber=123456;
 extern string    TradeComment="";
+extern bool      StealthMode = false;
 extern bool      Testing=false;
 
 //Global variables
@@ -32,6 +33,7 @@ datetime brokerQTTerminate;
 int serverOffsetFromLocal = -1;
 datetime serverFirstBar = 0;
 int openTicketNumbers[30];
+int nextOpenTicketNumber = 0;
 int Digit5 = 1;
 //+------------------------------------------------------------------+
 //| expert initialization function                                   |
@@ -90,7 +92,16 @@ int start()
     }
    int typeTrade = ShouldTrade(Bid, Ask);
    if (typeTrade == 0) return(0);
-   PlaceTrade(typeTrade, Symbol());
+   int ticketNumber = PlaceTrade(typeTrade, Symbol());
+   if (ticketNumber >0)
+   {
+      double price = OrderOpenPrice();
+      double spread = MarketInfo(NULL, MODE_SPREAD);
+      double stopLossPrice, targetPrice;
+      CalculateTargets(price, spread, typeTrade, StopLossPips, TargetPips, stopLossPrice, targetPrice );
+      if (!StealthMode)
+         SetTargets(ticketNumber, stopLossPrice, targetPrice);
+   }
 //----
    return(0);
   }
@@ -179,7 +190,7 @@ int ShouldTrade(double bid, double ask)
 void PlaceTrade(int tradeType, string symbol)
 {
 
-   double TP,SL,TradeSize;
+   double TradeSize;
    int Ticket;
    bool ModifyResult;
 
@@ -192,19 +203,15 @@ void PlaceTrade(int tradeType, string symbol)
    int orderOp = OP_BUY;
    string printType = "BUY";
    double orderPrice = Ask;
-   double exitPrice = Bid;
    color orderArrow = Blue;
    if(tradeType == -1)  //Short Trade
       {
          orderOp = OP_SELL;
          printType = "SELL";
          orderPrice = Bid;
-         exitPrice = Ask;
          orderArrow = Red;
        }
        
-      TP = exitPrice + tradeType * (TargetPips * Point);
-      SL = exitPrice  - tradeType * (StopLossPips * Point);
 
       Print("Entering ", printType, " order for ", DoubleToStr(TradeSize, 2), " lots of ",  Symbol(), " at ", DoubleToStr(orderPrice, Digits)); 
       Ticket = OrderSend(Symbol(),orderOp,NormalizeDouble(TradeSize,2),
@@ -212,25 +219,36 @@ void PlaceTrade(int tradeType, string symbol)
                         MagicNumber,orderArrow);
       if(Ticket >= 0)
          {
-         while(IsTradeContextBusy())
-            Sleep(100);
-         RefreshRates();
-         OrderSelect(Ticket,SELECT_BY_TICKET);
-         ModifyResult = OrderModify(Ticket,OrderOpenPrice(),
-                                    NormalizeDouble(SL,Digits),
-                                    NormalizeDouble(TP,Digits),0,orderArrow);
-         Print("Modifying order for SL=", DoubleToStr(SL,Digits), ", TP=", DoubleToStr(TP, Digits));                                    
-         if(!ModifyResult)
-            Alert("Stop Loss and Take Profit not set on order ",Ticket);
-         }  //if(Ticket >= 0)
+            return (Ticket);
+         }
       else
          {
          Alert("Trade Not Entered");
          }  //else
 
-   } 
+}
 
+void CalculateTargets(double price, double spread, int tradeType, int stopLossPips, int targetPips, double& stopLostPrice, double& targetPrice)
+{
+   
+} 
 
+bool SetTargets(int ticketNumber, double stopLossPrice, double takeProfitPrice)
+{
+         while(IsTradeContextBusy())
+            Sleep(100);
+         RefreshRates();
+         bool ModifyResult = OrderModify(ticketNumber,OrderOpenPrice(),
+                                    NormalizeDouble(stopLossPrice,Digits),
+                                    NormalizeDouble(takeProfitPrice,Digits),0,orderArrow);
+         Print("Modifying order for SL=", DoubleToStr(stopLossPrice,Digits), ", TP=", DoubleToStr(takeProfitPrice, Digits));                                    
+         if(!ModifyResult)
+         {
+            int err = GetLastError();
+            Alert("Stop Loss and Take Profit not set on order ",ticketNumber, " Error = ", err);
+            Print ("Error ", err, " returned from OrderModify");
+         }  //if(Ticket >= 0)
+}
 void CalculateBrokerTimes()
 {
    Print("Entering CalculateBrokerTimes(). serverOffsetFromLocal = ", serverOffsetFromLocal);
