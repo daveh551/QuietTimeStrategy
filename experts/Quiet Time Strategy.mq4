@@ -95,8 +95,10 @@ int start()
    int ticketNumber = PlaceTrade(typeTrade, Symbol());
    if (ticketNumber >0)
    {
+      OrderSelect(ticketNumber,SELECT_BY_TICKET);
       double price = OrderOpenPrice();
-      double spread = MarketInfo(NULL, MODE_SPREAD);
+      Print("Modifying SL and TP for Order #", ticketNumber, ". OrderPrice = ", DoubleToStr(price, Digits));
+      double spread = MarketInfo(Symbol(), MODE_SPREAD) * Point ;
       double stopLossPrice, targetPrice;
       CalculateTargets(price, spread, typeTrade, StopLossPips, TargetPips, stopLossPrice, targetPrice );
       if (!StealthMode)
@@ -137,6 +139,12 @@ void RunTests()
    if (AfterTermBumpsWindowTimes())
       testsPassed++;
    totalTests++;
+   if (CalculateTargetsReturnsSL())
+      testsPassed++;
+   totalTests++;
+   if (CalculateTargetsReturnsTP())
+      testsPassed++;
+   totalTests++;
    
    Print("Completed tests. ", testsPassed, " of ", totalTests, " passed.");
    
@@ -156,6 +164,8 @@ bool TimeWindowToTrade(datetime time)
       brokerQTEnd += 86400; 
       brokerQTTerminate += 86400;
    }
+   if (TimeDayOfWeek(time) == 0 && !TradeSunday) result = false;
+   if (TimeDayOfWeek(time) == 5 && !TradeFriday) result = false;
    return (result);
 }
 
@@ -178,7 +188,7 @@ int ShouldTrade(double bid, double ask)
    int result = 0;
    if (Ask < LowTrigger) result = 1; // execute a Buy trade
    if (Bid > HighTrigger) result = -1; // execute a Sell Trade
-   if ((ask -bid) > (MaximumSpread * Digit5 * Point)) 
+   if (result != 0 && (ask -bid + Point/2) >= (MaximumSpread * Digit5 * Point)) 
    {
       Print("Would have executed a trade, but spread is too wide: ", ask-bid, ", Max spread=", MaximumSpread, ", Point=", DoubleToStr(Point, Digits));
       result = 0;
@@ -187,7 +197,7 @@ int ShouldTrade(double bid, double ask)
 
 }
 
-void PlaceTrade(int tradeType, string symbol)
+int PlaceTrade(int tradeType, string symbol)
 {
 
    double TradeSize;
@@ -224,23 +234,33 @@ void PlaceTrade(int tradeType, string symbol)
       else
          {
          Alert("Trade Not Entered");
+         return (-1);
          }  //else
 
 }
 
-void CalculateTargets(double price, double spread, int tradeType, int stopLossPips, int targetPips, double& stopLostPrice, double& targetPrice)
+void CalculateTargets(double price, double spread, int tradeType, int stopLossPips, int targetPips, double& stopLossPrice, double& targetPrice)
 {
-   
+   stopLossPrice = price - tradeType * stopLossPips * Digit5 * Point - tradeType * spread;
+   targetPrice = price + tradeType * targetPips * Digit5 * Point;   
 } 
 
 bool SetTargets(int ticketNumber, double stopLossPrice, double takeProfitPrice)
 {
-         while(IsTradeContextBusy())
-            Sleep(100);
-         RefreshRates();
-         bool ModifyResult = OrderModify(ticketNumber,OrderOpenPrice(),
+   bool ModifyResult;
+         if (Testing)
+         {
+            ModifyResult = true;
+         }
+         else
+         {
+            while(IsTradeContextBusy())
+               Sleep(100);
+            RefreshRates();
+            ModifyResult = OrderModify(ticketNumber,OrderOpenPrice(),
                                     NormalizeDouble(stopLossPrice,Digits),
-                                    NormalizeDouble(takeProfitPrice,Digits),0,orderArrow);
+                                    NormalizeDouble(takeProfitPrice,Digits),0);
+         }
          Print("Modifying order for SL=", DoubleToStr(stopLossPrice,Digits), ", TP=", DoubleToStr(takeProfitPrice, Digits));                                    
          if(!ModifyResult)
          {
@@ -443,4 +463,29 @@ void ClearTicketNumbers()
 {
    for (int ix=0; ix <= ArrayRange(openTicketNumbers, 0); ix++)
       openTicketNumbers[ix] = 0;
+}
+/*     1234567890123456789012345678901 */     
+bool CalculateTargetsReturnsSL()
+{
+   double stopLoss =0.0;
+   double takeProfit = 0.0;
+   Print ("Entering CalculateTargetsReturnsSL. Price=1.35931, spread = .0007, Digit5=", Digit5, ", Point=", DoubleToStr(Point, 5));
+//void CalculateTargets(double price, double spread, int tradeType, int stopLossPips, int targetPips, double& stopLostPrice, double& targetPrice)
+//   stopLossPrice = price - tradeType * stopLossPips * Digit5 * Point - tradeType * spread;
+   Print ("tradeType * stopLossPips * Digit5 * Point =",  DoubleToStr(-1 * 12 * Digit5 * Point, 5));
+   Print ("tradeType * spread = ", DoubleToStr(-1 * 0.0007, 5));
+   CalculateTargets(1.35931, 0.0007, -1, 12, 10, stopLoss, takeProfit);
+   Print ("Calculate Targets returns stopLoss of ", DoubleToStr(stopLoss, 10));
+   return (Assert(NormalizeDouble(stopLoss,5) == 1.36121, "Wrong StopLoss"));
+}
+
+bool CalculateTargetsReturnsTP()
+{
+   double takeProfit =  0.0;
+   double stopLoss = 0.0;
+   Print ("Entering CalculateTargetsReturnsTP. Price=1.35931, spread = .0007, Digit5=", Digit5, ", Point=", DoubleToStr(Point, 5));
+   // targetPrice = price + tradeType * targetPips * Digit5 * Point;   
+  CalculateTargets(1.35931, 0.0007, -1, 12, 10, stopLoss, takeProfit);
+   Print ("Calculate Targets returns takeProfit of ", DoubleToStr(takeProfit, 10));
+   return (Assert(NormalizeDouble(takeProfit,5) == 1.35831, "Wrong TakeProfit"));
 }
