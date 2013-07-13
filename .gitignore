@@ -20,4 +20,7 @@ tester/
 experts/libraries/CheckAccountType.dll
 experts/Quiet Time Strategy.log
 *.dat
+experts/files/
+experts/presets/
+experts/libraries/MyfxbookEA.dll
 

@@ -163,6 +163,7 @@ bool TimeWindowToTrade(datetime time)
       brokerQTStart += 86400;
       brokerQTEnd += 86400; 
       brokerQTTerminate += 86400;
+      QuietTimeEntryPrice = 0.00;
    }
    if (TimeDayOfWeek(time) == 0 && !TradeSunday) result = false;
    if (TimeDayOfWeek(time) == 5 && !TradeFriday) result = false;
