@@ -8,8 +8,11 @@
 #include <Assert.mqh>
 #include <PcntTradeSize.mqh>
 //--- input parameters
+extern string  TimesInfo="These times should be set (in 24 Hour time) for your local timezone";
+extern string  TimesInfo2="They should correspond to 3:00PM and 7:00PM New York Time";
 extern string  QuietTimeStart="15:00";
 extern string  QuietTimeEnd="19:00";
+extern string  TimesInfo3="This should correspond to 2:00AM New York Time";
 extern string  QuietTimeTerminate="02:00";
 extern bool    TradeSunday=false;
 extern bool    TradeFriday=false;
@@ -22,6 +25,10 @@ extern int       MagicNumber=123456;
 extern string    TradeComment="";
 extern bool      StealthMode = false;
 extern bool      Testing=false;
+extern bool      UseATRFilter=true;
+extern int       ATRPeriod=1;
+extern int       ATRAveraging=5;
+extern double    ATRRatioToSLLimit=0.5;
 
 //Global variables
 double QuietTimeEntryPrice = 0.00;   // The bid price at the start of quiet time.
@@ -35,11 +42,18 @@ datetime serverFirstBar = 0;
 int openTicketNumbers[30];
 int nextOpenTicketNumber = 0;
 int Digit5 = 1;
+string version = "v0.1.1";
+//Per bar values
+datetime time0;
+double atrInPips;
+double barHigh;
+double barLow;
 //+------------------------------------------------------------------+
 //| expert initialization function                                   |
 //+------------------------------------------------------------------+
 int init()
   {
+   Print("Initializing QuietTimeTrader ", version);
 //----
    if (Testing)
       RunTests();
@@ -90,15 +104,18 @@ int start()
       Print("QuietTimeEntryPrice = ", DoubleToStr(QuietTimeEntryPrice, Digits), ", HighTrigger= ", DoubleToStr(HighTrigger, Digits), ", LowTrigger= ", DoubleToStr(LowTrigger, Digits));
           MakeTradeWindow(brokerQTStart,brokerQTEnd, LowTrigger, HighTrigger);
     }
+    if (NewBar()) CalculateNewPerBarValues();
+    //Print("At ", TimeToStr(TimeCurrent())," iATR(NULL, M1,5,1) = ", DoubleToStr(iATR(NULL,PERIOD_M1, 5, 1), Digits));
    int typeTrade = ShouldTrade(Bid, Ask);
    if (typeTrade == 0) return(0);
+   if (!AllowTrade()) return (0);
    int ticketNumber = PlaceTrade(typeTrade, Symbol());
    if (ticketNumber >0)
    {
       OrderSelect(ticketNumber,SELECT_BY_TICKET);
       double price = OrderOpenPrice();
       Print("Modifying SL and TP for Order #", ticketNumber, ". OrderPrice = ", DoubleToStr(price, Digits));
-      double spread = MarketInfo(Symbol(), MODE_SPREAD) * Point ;
+      double spread = Ask-Bid ;
       double stopLossPrice, targetPrice;
       CalculateTargets(price, spread, typeTrade, StopLossPips, TargetPips, stopLossPrice, targetPrice );
       if (!StealthMode)
@@ -194,10 +211,18 @@ int ShouldTrade(double bid, double ask)
       Print("Would have executed a trade, but spread is too wide: ", ask-bid, ", Max spread=", MaximumSpread, ", Point=", DoubleToStr(Point, Digits));
       result = 0;
    }
+   //if (result != 0)
+   //   Print("ShouldTrade = ", result, ", Spread= ", DoubleToStr(ask-bid, Digits));
    return (result);
 
 }
 
+bool AllowTrade()
+{
+   if (UseATRFilter)
+      if (!ATRFilter()) return (false);
+   return (true);
+}
 int PlaceTrade(int tradeType, string symbol)
 {
 
@@ -205,7 +230,14 @@ int PlaceTrade(int tradeType, string symbol)
    int Ticket;
    bool ModifyResult;
 
-   TradeSize = PcntTradeSize(Symbol(), StopLossPips, PercentRisk, 1, false, true);
+   double spreadInPoints = (Ask - Bid)/Point;
+   double stopLossRisk = StopLossPips + spreadInPoints/Digit5;
+   Print("Calculating lot size. SpreadInPoints= ", DoubleToStr(spreadInPoints, Digits), 
+      ", Points= ", DoubleToStr(Point, Digits), 
+      ", StopLossPips= ", StopLossPips, 
+      "Risk= ", DoubleToStr(stopLossRisk, Digits));
+   
+   TradeSize = PcntTradeSize(symbol, stopLossRisk , PercentRisk, 1, false, true);
 
       while(IsTradeContextBusy())  //our loop for the busy trade context
          Sleep(100);  //sleep for 100 ms and test the trade context again
@@ -383,18 +415,18 @@ void CloseOpenOrders()
 }
 int FindServerOffset()
 {
-   Print("Entering FindServerOffset()");
+   //Print("Entering FindServerOffset()");
    if (Testing) return (3600); // an arbitrary number - anything will do for testing
    if (serverFirstBar == 0)
    {
 
       serverFirstBar = iTime(Symbol(), PERIOD_M1, 0);
-      Print ("Set serverFirstBar to ", TimeToStr(serverFirstBar));
+      //Print ("Set serverFirstBar to ", TimeToStr(serverFirstBar));
       return (-1);
    }
    
    datetime ServerNow = iTime(Symbol(), PERIOD_M1, 0);
-   Print("Comparing ServerNow to serverFirstBar. ServerNow =", TimeToStr(ServerNow));
+   //Print("Comparing ServerNow to serverFirstBar. ServerNow =", TimeToStr(ServerNow));
    if (ServerNow > serverFirstBar)
    {
       datetime localNow = (TimeLocal()/ 60) * 60;
@@ -489,4 +521,30 @@ bool CalculateTargetsReturnsTP()
   CalculateTargets(1.35931, 0.0007, -1, 12, 10, stopLoss, takeProfit);
    Print ("Calculate Targets returns takeProfit of ", DoubleToStr(takeProfit, 10));
    return (Assert(NormalizeDouble(takeProfit,5) == 1.35831, "Wrong TakeProfit"));
+}
+
+bool ATRFilter()
+{
+
+   if (atrInPips >  StopLossPips*ATRRatioToSLLimit)
+   {
+      Print("ATR over last ", 5, " Minutes is ", DoubleToStr(atrInPips, Digits), " which is greater than StopLossRatio ", DoubleToStr(StopLossPips*ATRRatioToSLLimit, Digits));
+      return (false);
+   }
+   return(true);
+}
+void CalculateNewPerBarValues()
+{
+   double atr = iATR(Symbol(), PERIOD_M1, ATRAveraging, 1);
+   double atrInPoints = atr/Point;
+   atrInPips = atrInPoints/Digit5;
+   Print("atr= ", DoubleToStr(atr, Digits), ", atrInPoints= ", DoubleToStr(atrInPoints, Digits), ", atrInPips= ", DoubleToStr(atrInPips, Digits));
+}
+
+bool NewBar()
+{
+   datetime timeNow =  iTime(NULL, PERIOD_M1, 0);
+   if (time0 == timeNow) return(false);
+   time0 = timeNow;
+   return (true);
 }
