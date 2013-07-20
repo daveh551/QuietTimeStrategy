@@ -55,6 +55,8 @@ double openSlowMAShift5[30];
 double openQTEntryPrice[30];
 datetime closeTime[30];
 double closePrice[30];
+int orderType[30];
+double orderProfit[30];
 int nextOpenTicketNumber = 0;
 int Digit5 = 1;
 string version = "v0.1.1";
@@ -95,6 +97,11 @@ int deinit()
       serverFirstBar = 0;
       QuietTimeEntryPrice = 0.00;
       ClearTicketNumbers();
+      if (trackingFileHandle != 0) 
+      {
+         FileClose(trackingFileHandle);
+         trackingFileHandle = 0;
+      }
       if (ObjectFind("TRADEWINDOW") != -1)
          ObjectDelete("TRADEWINDOW");
 //----
@@ -200,6 +207,11 @@ bool TimeWindowToTrade(datetime time)
       brokerQTEnd += 86400; 
       brokerQTTerminate += 86400;
       QuietTimeEntryPrice = 0.00;
+      if (trackingFileHandle > 0)
+      {
+         FileClose(trackingFileHandle);
+         trackingFileHandle = 0;
+      }
    }
    if (TimeDayOfWeek(time) == 0 && !TradeSunday) result = false;
    if (TimeDayOfWeek(time) == 5 && !TradeFriday) result = false;
@@ -629,7 +641,7 @@ bool NewBar()
 void InitializeTrackingFile()
 {
  datetime currentTime = TimeCurrent();
-   trackingFileName = TimeYear(currentTime) + "-" +StringSubstr( (100 +TimeMonth(currentTime)), 1) + "-" + StringSubstr((100 + TimeDay(currentTime)), 1) + ".CSV";
+   trackingFileName = TimeYear(currentTime) + "-" +StringSubstr( (100 +TimeMonth(currentTime))+ "", 1) + "-" + StringSubstr((100 + TimeDay(currentTime))+ "", 1) + ".CSV";
    trackingFileHandle = FileOpen(trackingFileName,  FILE_READ | FILE_WRITE | FILE_CSV, ',');
    FileSeek(trackingFileHandle, 0, SEEK_END);
    if (FileTell(trackingFileHandle) == 0) // new file
@@ -637,6 +649,9 @@ void InitializeTrackingFile()
       //Write out a header
       FileWrite(trackingFileHandle,
           "TicketNumber"
+          , "Type"
+          , "Currency"
+          , "Entry Time"
           , "Entry Time"
           , "Entry Price"
           , "Stop Loss"
@@ -648,7 +663,9 @@ void InitializeTrackingFile()
           , "Fast MA"
           , "Fast MA Shift 5"
           , "Closing Time"
+          , "Closing Time"
           , "Closing Price"
+          , "Profit"
           );
       FileFlush(trackingFileHandle);
    }
@@ -670,19 +687,30 @@ void RecordOrder(int ticketNumber)
       openFastMA[ticketArrayIndex] = iMA(NULL, PERIOD_M1, FastMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
       openFastMAShift5[ticketArrayIndex] = iMA(NULL, PERIOD_M1, FastMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 6);
       openSlowMA[ticketArrayIndex] = iMA(NULL, PERIOD_M1, SlowMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
-      openSlowMA[ticketArrayIndex] = iMA(NULL, PERIOD_M1, SlowMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 6);
+      openSlowMAShift5[ticketArrayIndex] = iMA(NULL, PERIOD_M1, SlowMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 6);
       openQTEntryPrice[ticketArrayIndex] = QuietTimeEntryPrice;     
       closeTime[ticketArrayIndex] = 0;
       closePrice[ticketArrayIndex] = 0.0;
+      orderType[ticketArrayIndex] = OrderType();
+      orderProfit[ticketArrayIndex] = 0;
    }
 }
 
 void WriteCurrentOrder(int ticketIndex)
 {
    int ticketArrayIndex = ticketIndex;
+   if (trackingFileHandle == 0) InitializeTrackingFile();
+   string orderT = "BUY";
+   if (orderType[ticketArrayIndex] == OP_SELL) orderT = "SELL";
+   double profit = 0.0;
+   if (closePrice[ticketArrayIndex] != 0.0) profit = closePrice[ticketArrayIndex] - openPrice[ticketArrayIndex];
+   if (orderType[ticketArrayIndex] == OP_SELL) profit = -profit;
       FileWrite(trackingFileHandle,
           openTicketNumbers[ticketArrayIndex]  //"TicketNumber"
+          , orderT
+          , Symbol()
           , openTime[ticketArrayIndex] // "Entry Time"
+          , TimeToStr(openTime[ticketArrayIndex])
           , openPrice[ticketArrayIndex] //"Entry Price"
           , tradeSL[ticketArrayIndex]  //"Stop Loss"
           , tradeTP[ticketArrayIndex]  //"Take Profit"
@@ -693,7 +721,9 @@ void WriteCurrentOrder(int ticketIndex)
           , openFastMA[ticketArrayIndex] //"Fast MA"
           , openFastMAShift5[ticketArrayIndex] //"Fast MA Shift 5"
           , closeTime[ticketArrayIndex]
+          , TimeToStr(closeTime[ticketArrayIndex])
           , closePrice[ticketArrayIndex]
+          , profit
           );
       FileFlush(trackingFileHandle);
    
