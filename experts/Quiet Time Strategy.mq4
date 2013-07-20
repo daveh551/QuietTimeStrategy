@@ -29,6 +29,8 @@ extern bool      UseATRFilter=true;
 extern int       ATRPeriod=1;
 extern int       ATRAveraging=5;
 extern double    ATRRatioToSLLimit=0.5;
+extern int       SlowMAPeriod = 10;
+extern int       FastMAPeriod = 3;
 
 //Global variables
 double QuietTimeEntryPrice = 0.00;   // The bid price at the start of quiet time.
@@ -39,10 +41,25 @@ datetime brokerQTEnd;
 datetime brokerQTTerminate;
 int serverOffsetFromLocal = -1;
 datetime serverFirstBar = 0;
+int nextOrderNumber;
 int openTicketNumbers[30];
+datetime openTime[30];
+double openPrice[30];
+double tradeSL[30];
+double tradeTP[30];
+double openATR[30];
+double openFastMA[30];
+double openFastMAShift5[30];
+double openSlowMA[30];
+double openSlowMAShift5[30];
+double openQTEntryPrice[30];
+datetime closeTime[30];
+double closePrice[30];
 int nextOpenTicketNumber = 0;
 int Digit5 = 1;
 string version = "v0.1.1";
+string trackingFileName;
+int trackingFileHandle;
 //Per bar values
 datetime time0;
 double atrInPips;
@@ -62,7 +79,9 @@ int init()
       Digit5 = 10;
    else Digit5 = 1;
    ClearTicketNumbers();
-     
+   
+   InitializeTrackingFile();  
+   
 //----
    return(0);
   }
@@ -262,6 +281,7 @@ int PlaceTrade(int tradeType, string symbol)
                         MagicNumber,orderArrow);
       if(Ticket >= 0)
          {
+            RecordOrder(Ticket);
             return (Ticket);
          }
       else
@@ -295,7 +315,15 @@ bool SetTargets(int ticketNumber, double stopLossPrice, double takeProfitPrice)
                                     NormalizeDouble(takeProfitPrice,Digits),0);
          }
          Print("Modifying order for SL=", DoubleToStr(stopLossPrice,Digits), ", TP=", DoubleToStr(takeProfitPrice, Digits));                                    
-         if(!ModifyResult)
+         if(ModifyResult)
+         {
+            if (OrderSelect(ticketNumber, SELECT_BY_TICKET))
+            {
+               tradeSL[nextOpenTicketNumber -1] = OrderStopLoss();
+               tradeTP[nextOpenTicketNumber -1] = OrderTakeProfit();
+               WriteCurrentOrder(nextOpenTicketNumber - 1);
+            }
+         }
          {
             int err = GetLastError();
             Alert("Stop Loss and Take Profit not set on order ",ticketNumber, " Error = ", err);
@@ -369,9 +397,57 @@ int TradesOpen()
    int totalOrdersCount = OrdersTotal();
    int ordersForThisSymbol = 0;
    
-   if (totalOrdersCount == 0) return (0);
+   if (totalOrdersCount == 0)
+      if (nextOpenTicketNumber == 0) return (0);
+      else
+      {
+         // An order must have closed
+         for (int ix=0; ix < nextOpenTicketNumber; ix++)
+         {
+            if (OrderSelect(openTicketNumbers[ix], SELECT_BY_TICKET))
+            {
+               closeTime[ix] = OrderCloseTime();
+               if (closeTime[ix] != 0)
+               {
+                  closePrice[ix] = OrderClosePrice();
+                  WriteCurrentOrder(ix);
+                  for (int jx = ix; jx < ArrayRange(openTicketNumbers, 0) - 1; jx++)
+                  {
+                     openTicketNumbers[jx] = openTicketNumbers[jx+1];
+                     openTime[jx] = openTime[jx+1];
+                     openPrice[jx] = openPrice[jx+1];
+                     tradeSL[jx] = tradeSL[jx+1];
+                     tradeTP[jx] = tradeTP[jx+1];
+                     openATR[jx] = openATR[jx+1];
+                     openFastMA[jx] = openFastMA[jx+1];
+                     openFastMAShift5[jx] = openFastMAShift5[jx+1];
+                     openSlowMA[jx] = openSlowMA[jx+1];
+                     openSlowMAShift5[jx] = openSlowMAShift5[jx+1];
+                     openQTEntryPrice[jx] = openQTEntryPrice[jx+1];
+                     closeTime[jx] = closeTime[jx+1];
+                     closePrice[jx] = closePrice[jx+1];
+                  }
+                     jx = ArrayRange(openTicketNumbers,0) - 1;
+                     openTicketNumbers[jx] = 0;
+                     openTime[jx] = 0;
+                     openPrice[jx] = 0.0;
+                     tradeSL[jx] = 0.0;
+                     tradeTP[jx] = 0.0;
+                     openATR[jx] = 0.0;
+                     openFastMA[jx] = 0.0;
+                     openFastMAShift5[jx] = 0.0;
+                     openSlowMA[jx] = 0.0;
+                     openSlowMAShift5[jx] = 0.0;
+                     openQTEntryPrice[jx] = 0.0;
+                     closeTime[jx] = 0;
+                     closePrice[jx] = 0.0;
+                  ix--;
+               }
+            }
+         }
+      }
    //Print("Entering TradesOpen(). totalOrderCount = ", totalOrdersCount);
-   for (int ix = 0; ix < totalOrdersCount; ix++)
+   for ( ix = 0; ix < totalOrdersCount; ix++)
    {
       //Print("In Open Trades. Examining openOrder[", ix, "] Symbol=", Symbol(), ", OrderSymbol()=", OrderSymbol(), ", OrderTicket=", OrderTicket());
       if (OrderSelect(ix, SELECT_BY_POS, MODE_TRADES))
@@ -379,7 +455,7 @@ int TradesOpen()
          if (OrderSymbol() == Symbol())
          {
             //Print("Order is for active symbol ", Symbol(), ". ordersForThisSymol = ", ordersForThisSymbol);
-            openTicketNumbers[ordersForThisSymbol] = OrderTicket();
+            //openTicketNumbers[ordersForThisSymbol] = OrderTicket();
             ordersForThisSymbol++;
          }
       }
@@ -496,8 +572,9 @@ void ClearTicketNumbers()
 {
    for (int ix=0; ix <= ArrayRange(openTicketNumbers, 0); ix++)
       openTicketNumbers[ix] = 0;
+   nextOpenTicketNumber = 0;      
 }
-/*     1234567890123456789012345678901 */     
+
 bool CalculateTargetsReturnsSL()
 {
    double stopLoss =0.0;
@@ -548,3 +625,77 @@ bool NewBar()
    time0 = timeNow;
    return (true);
 }
+
+void InitializeTrackingFile()
+{
+ datetime currentTime = TimeCurrent();
+   trackingFileName = TimeYear(currentTime) + "-" +StringSubstr( (100 +TimeMonth(currentTime)), 1) + "-" + StringSubstr((100 + TimeDay(currentTime)), 1) + ".CSV";
+   trackingFileHandle = FileOpen(trackingFileName,  FILE_READ | FILE_WRITE | FILE_CSV, ',');
+   FileSeek(trackingFileHandle, 0, SEEK_END);
+   if (FileTell(trackingFileHandle) == 0) // new file
+   {
+      //Write out a header
+      FileWrite(trackingFileHandle,
+          "TicketNumber"
+          , "Entry Time"
+          , "Entry Price"
+          , "Stop Loss"
+          , "Take Profit"
+          , "QT Entry Price"
+          , "ATR"
+          , "Slow MA"
+          , "Slow MA Shift 5"
+          , "Fast MA"
+          , "Fast MA Shift 5"
+          , "Closing Time"
+          , "Closing Price"
+          );
+      FileFlush(trackingFileHandle);
+   }
+
+}
+
+void RecordOrder(int ticketNumber)
+{
+   int ticketArrayIndex = nextOpenTicketNumber;
+   openTicketNumbers[nextOpenTicketNumber] = ticketNumber;
+   nextOpenTicketNumber++;
+   if (OrderSelect(ticketNumber, SELECT_BY_TICKET))
+   {
+      openTime[ticketArrayIndex] = OrderOpenTime();
+      openPrice[ticketArrayIndex] = OrderOpenPrice();
+      tradeSL[ticketArrayIndex] = 0.0;
+      tradeTP[ticketArrayIndex] = 0.0;
+      openATR[ticketArrayIndex] = atrInPips;
+      openFastMA[ticketArrayIndex] = iMA(NULL, PERIOD_M1, FastMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
+      openFastMAShift5[ticketArrayIndex] = iMA(NULL, PERIOD_M1, FastMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 6);
+      openSlowMA[ticketArrayIndex] = iMA(NULL, PERIOD_M1, SlowMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
+      openSlowMA[ticketArrayIndex] = iMA(NULL, PERIOD_M1, SlowMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 6);
+      openQTEntryPrice[ticketArrayIndex] = QuietTimeEntryPrice;     
+      closeTime[ticketArrayIndex] = 0;
+      closePrice[ticketArrayIndex] = 0.0;
+   }
+}
+
+void WriteCurrentOrder(int ticketIndex)
+{
+   int ticketArrayIndex = ticketIndex;
+      FileWrite(trackingFileHandle,
+          openTicketNumbers[ticketArrayIndex]  //"TicketNumber"
+          , openTime[ticketArrayIndex] // "Entry Time"
+          , openPrice[ticketArrayIndex] //"Entry Price"
+          , tradeSL[ticketArrayIndex]  //"Stop Loss"
+          , tradeTP[ticketArrayIndex]  //"Take Profit"
+          , openQTEntryPrice[ticketArrayIndex]  //"QT Entry Price"
+          , openATR[ticketArrayIndex] // "ATR"
+          , openSlowMA[ticketArrayIndex] //"Slow MA"
+          , openSlowMAShift5[ticketArrayIndex] //"Slow MA Shift 5"
+          , openFastMA[ticketArrayIndex] //"Fast MA"
+          , openFastMAShift5[ticketArrayIndex] //"Fast MA Shift 5"
+          , closeTime[ticketArrayIndex]
+          , closePrice[ticketArrayIndex]
+          );
+      FileFlush(trackingFileHandle);
+   
+}
+
