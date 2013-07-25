@@ -8,8 +8,11 @@
 #include <Assert.mqh>
 #include <PcntTradeSize.mqh>
 //--- input parameters
+extern string  TimesInfo="These times should be set (in 24 Hour time) for your local timezone";
+extern string  TimesInfo2="They should correspond to 3:00PM and 7:00PM New York Time";
 extern string  QuietTimeStart="15:00";
 extern string  QuietTimeEnd="19:00";
+extern string  TimesInfo3="This should correspond to 2:00AM New York Time";
 extern string  QuietTimeTerminate="02:00";
 extern bool    TradeSunday=false;
 extern bool    TradeFriday=false;
@@ -22,6 +25,12 @@ extern int       MagicNumber=123456;
 extern string    TradeComment="";
 extern bool      StealthMode = false;
 extern bool      Testing=false;
+extern bool      UseATRFilter=true;
+extern int       ATRPeriod=1;
+extern int       ATRAveraging=5;
+extern double    ATRRatioToSLLimit=0.5;
+extern int       SlowMAPeriod = 10;
+extern int       FastMAPeriod = 3;
 
 //Global variables
 double QuietTimeEntryPrice = 0.00;   // The bid price at the start of quiet time.
@@ -32,14 +41,38 @@ datetime brokerQTEnd;
 datetime brokerQTTerminate;
 int serverOffsetFromLocal = -1;
 datetime serverFirstBar = 0;
+int nextOrderNumber;
 int openTicketNumbers[30];
+datetime openTime[30];
+double openPrice[30];
+double tradeSL[30];
+double tradeTP[30];
+double openATR[30];
+double openFastMA[30];
+double openFastMAShift5[30];
+double openSlowMA[30];
+double openSlowMAShift5[30];
+double openQTEntryPrice[30];
+datetime closeTime[30];
+double closePrice[30];
+int orderType[30];
+double orderProfit[30];
 int nextOpenTicketNumber = 0;
 int Digit5 = 1;
+string version = "v0.1.1";
+string trackingFileName;
+int trackingFileHandle;
+//Per bar values
+datetime time0;
+double atrInPips;
+double barHigh;
+double barLow;
 //+------------------------------------------------------------------+
 //| expert initialization function                                   |
 //+------------------------------------------------------------------+
 int init()
   {
+   Print("Initializing QuietTimeTrader ", version);
 //----
    if (Testing)
       RunTests();
@@ -48,7 +81,9 @@ int init()
       Digit5 = 10;
    else Digit5 = 1;
    ClearTicketNumbers();
-     
+   
+   InitializeTrackingFile();  
+   
 //----
    return(0);
   }
@@ -62,6 +97,11 @@ int deinit()
       serverFirstBar = 0;
       QuietTimeEntryPrice = 0.00;
       ClearTicketNumbers();
+      if (trackingFileHandle != 0) 
+      {
+         FileClose(trackingFileHandle);
+         trackingFileHandle = 0;
+      }
       if (ObjectFind("TRADEWINDOW") != -1)
          ObjectDelete("TRADEWINDOW");
 //----
@@ -90,15 +130,18 @@ int start()
       Print("QuietTimeEntryPrice = ", DoubleToStr(QuietTimeEntryPrice, Digits), ", HighTrigger= ", DoubleToStr(HighTrigger, Digits), ", LowTrigger= ", DoubleToStr(LowTrigger, Digits));
           MakeTradeWindow(brokerQTStart,brokerQTEnd, LowTrigger, HighTrigger);
     }
+    if (NewBar()) CalculateNewPerBarValues();
+    //Print("At ", TimeToStr(TimeCurrent())," iATR(NULL, M1,5,1) = ", DoubleToStr(iATR(NULL,PERIOD_M1, 5, 1), Digits));
    int typeTrade = ShouldTrade(Bid, Ask);
    if (typeTrade == 0) return(0);
+   if (!AllowTrade()) return (0);
    int ticketNumber = PlaceTrade(typeTrade, Symbol());
    if (ticketNumber >0)
    {
       OrderSelect(ticketNumber,SELECT_BY_TICKET);
       double price = OrderOpenPrice();
       Print("Modifying SL and TP for Order #", ticketNumber, ". OrderPrice = ", DoubleToStr(price, Digits));
-      double spread = MarketInfo(Symbol(), MODE_SPREAD) * Point ;
+      double spread = Ask-Bid ;
       double stopLossPrice, targetPrice;
       CalculateTargets(price, spread, typeTrade, StopLossPips, TargetPips, stopLossPrice, targetPrice );
       if (!StealthMode)
@@ -164,6 +207,11 @@ bool TimeWindowToTrade(datetime time)
       brokerQTEnd += 86400; 
       brokerQTTerminate += 86400;
       QuietTimeEntryPrice = 0.00;
+      if (trackingFileHandle > 0)
+      {
+         FileClose(trackingFileHandle);
+         trackingFileHandle = 0;
+      }
    }
    if (TimeDayOfWeek(time) == 0 && !TradeSunday) result = false;
    if (TimeDayOfWeek(time) == 5 && !TradeFriday) result = false;
@@ -194,10 +242,18 @@ int ShouldTrade(double bid, double ask)
       Print("Would have executed a trade, but spread is too wide: ", ask-bid, ", Max spread=", MaximumSpread, ", Point=", DoubleToStr(Point, Digits));
       result = 0;
    }
+   //if (result != 0)
+   //   Print("ShouldTrade = ", result, ", Spread= ", DoubleToStr(ask-bid, Digits));
    return (result);
 
 }
 
+bool AllowTrade()
+{
+   if (UseATRFilter)
+      if (!ATRFilter()) return (false);
+   return (true);
+}
 int PlaceTrade(int tradeType, string symbol)
 {
 
@@ -205,7 +261,14 @@ int PlaceTrade(int tradeType, string symbol)
    int Ticket;
    bool ModifyResult;
 
-   TradeSize = PcntTradeSize(Symbol(), StopLossPips, PercentRisk, 1, false, true);
+   double spreadInPoints = (Ask - Bid)/Point;
+   double stopLossRisk = StopLossPips + spreadInPoints/Digit5;
+   Print("Calculating lot size. SpreadInPoints= ", DoubleToStr(spreadInPoints, Digits), 
+      ", Points= ", DoubleToStr(Point, Digits), 
+      ", StopLossPips= ", StopLossPips, 
+      "Risk= ", DoubleToStr(stopLossRisk, Digits));
+   
+   TradeSize = PcntTradeSize(symbol, stopLossRisk , PercentRisk, 1, false, true);
 
       while(IsTradeContextBusy())  //our loop for the busy trade context
          Sleep(100);  //sleep for 100 ms and test the trade context again
@@ -230,6 +293,7 @@ int PlaceTrade(int tradeType, string symbol)
                         MagicNumber,orderArrow);
       if(Ticket >= 0)
          {
+            RecordOrder(Ticket);
             return (Ticket);
          }
       else
@@ -263,7 +327,15 @@ bool SetTargets(int ticketNumber, double stopLossPrice, double takeProfitPrice)
                                     NormalizeDouble(takeProfitPrice,Digits),0);
          }
          Print("Modifying order for SL=", DoubleToStr(stopLossPrice,Digits), ", TP=", DoubleToStr(takeProfitPrice, Digits));                                    
-         if(!ModifyResult)
+         if(ModifyResult)
+         {
+            if (OrderSelect(ticketNumber, SELECT_BY_TICKET))
+            {
+               tradeSL[nextOpenTicketNumber -1] = OrderStopLoss();
+               tradeTP[nextOpenTicketNumber -1] = OrderTakeProfit();
+               WriteCurrentOrder(nextOpenTicketNumber - 1);
+            }
+         }
          {
             int err = GetLastError();
             Alert("Stop Loss and Take Profit not set on order ",ticketNumber, " Error = ", err);
@@ -337,9 +409,57 @@ int TradesOpen()
    int totalOrdersCount = OrdersTotal();
    int ordersForThisSymbol = 0;
    
-   if (totalOrdersCount == 0) return (0);
+   if (totalOrdersCount == 0)
+      if (nextOpenTicketNumber == 0) return (0);
+      else
+      {
+         // An order must have closed
+         for (int ix=0; ix < nextOpenTicketNumber; ix++)
+         {
+            if (OrderSelect(openTicketNumbers[ix], SELECT_BY_TICKET))
+            {
+               closeTime[ix] = OrderCloseTime();
+               if (closeTime[ix] != 0)
+               {
+                  closePrice[ix] = OrderClosePrice();
+                  WriteCurrentOrder(ix);
+                  for (int jx = ix; jx < ArrayRange(openTicketNumbers, 0) - 1; jx++)
+                  {
+                     openTicketNumbers[jx] = openTicketNumbers[jx+1];
+                     openTime[jx] = openTime[jx+1];
+                     openPrice[jx] = openPrice[jx+1];
+                     tradeSL[jx] = tradeSL[jx+1];
+                     tradeTP[jx] = tradeTP[jx+1];
+                     openATR[jx] = openATR[jx+1];
+                     openFastMA[jx] = openFastMA[jx+1];
+                     openFastMAShift5[jx] = openFastMAShift5[jx+1];
+                     openSlowMA[jx] = openSlowMA[jx+1];
+                     openSlowMAShift5[jx] = openSlowMAShift5[jx+1];
+                     openQTEntryPrice[jx] = openQTEntryPrice[jx+1];
+                     closeTime[jx] = closeTime[jx+1];
+                     closePrice[jx] = closePrice[jx+1];
+                  }
+                     jx = ArrayRange(openTicketNumbers,0) - 1;
+                     openTicketNumbers[jx] = 0;
+                     openTime[jx] = 0;
+                     openPrice[jx] = 0.0;
+                     tradeSL[jx] = 0.0;
+                     tradeTP[jx] = 0.0;
+                     openATR[jx] = 0.0;
+                     openFastMA[jx] = 0.0;
+                     openFastMAShift5[jx] = 0.0;
+                     openSlowMA[jx] = 0.0;
+                     openSlowMAShift5[jx] = 0.0;
+                     openQTEntryPrice[jx] = 0.0;
+                     closeTime[jx] = 0;
+                     closePrice[jx] = 0.0;
+                  ix--;
+               }
+            }
+         }
+      }
    //Print("Entering TradesOpen(). totalOrderCount = ", totalOrdersCount);
-   for (int ix = 0; ix < totalOrdersCount; ix++)
+   for ( ix = 0; ix < totalOrdersCount; ix++)
    {
       //Print("In Open Trades. Examining openOrder[", ix, "] Symbol=", Symbol(), ", OrderSymbol()=", OrderSymbol(), ", OrderTicket=", OrderTicket());
       if (OrderSelect(ix, SELECT_BY_POS, MODE_TRADES))
@@ -347,7 +467,7 @@ int TradesOpen()
          if (OrderSymbol() == Symbol())
          {
             //Print("Order is for active symbol ", Symbol(), ". ordersForThisSymol = ", ordersForThisSymbol);
-            openTicketNumbers[ordersForThisSymbol] = OrderTicket();
+            //openTicketNumbers[ordersForThisSymbol] = OrderTicket();
             ordersForThisSymbol++;
          }
       }
@@ -383,18 +503,18 @@ void CloseOpenOrders()
 }
 int FindServerOffset()
 {
-   Print("Entering FindServerOffset()");
+   //Print("Entering FindServerOffset()");
    if (Testing) return (3600); // an arbitrary number - anything will do for testing
    if (serverFirstBar == 0)
    {
 
       serverFirstBar = iTime(Symbol(), PERIOD_M1, 0);
-      Print ("Set serverFirstBar to ", TimeToStr(serverFirstBar));
+      //Print ("Set serverFirstBar to ", TimeToStr(serverFirstBar));
       return (-1);
    }
    
    datetime ServerNow = iTime(Symbol(), PERIOD_M1, 0);
-   Print("Comparing ServerNow to serverFirstBar. ServerNow =", TimeToStr(ServerNow));
+   //Print("Comparing ServerNow to serverFirstBar. ServerNow =", TimeToStr(ServerNow));
    if (ServerNow > serverFirstBar)
    {
       datetime localNow = (TimeLocal()/ 60) * 60;
@@ -464,8 +584,9 @@ void ClearTicketNumbers()
 {
    for (int ix=0; ix <= ArrayRange(openTicketNumbers, 0); ix++)
       openTicketNumbers[ix] = 0;
+   nextOpenTicketNumber = 0;      
 }
-/*     1234567890123456789012345678901 */     
+
 bool CalculateTargetsReturnsSL()
 {
    double stopLoss =0.0;
@@ -490,3 +611,121 @@ bool CalculateTargetsReturnsTP()
    Print ("Calculate Targets returns takeProfit of ", DoubleToStr(takeProfit, 10));
    return (Assert(NormalizeDouble(takeProfit,5) == 1.35831, "Wrong TakeProfit"));
 }
+
+bool ATRFilter()
+{
+
+   if (atrInPips >  StopLossPips*ATRRatioToSLLimit)
+   {
+      Print("ATR over last ", 5, " Minutes is ", DoubleToStr(atrInPips, Digits), " which is greater than StopLossRatio ", DoubleToStr(StopLossPips*ATRRatioToSLLimit, Digits));
+      return (false);
+   }
+   return(true);
+}
+void CalculateNewPerBarValues()
+{
+   double atr = iATR(Symbol(), PERIOD_M1, ATRAveraging, 1);
+   double atrInPoints = atr/Point;
+   atrInPips = atrInPoints/Digit5;
+   Print("atr= ", DoubleToStr(atr, Digits), ", atrInPoints= ", DoubleToStr(atrInPoints, Digits), ", atrInPips= ", DoubleToStr(atrInPips, Digits));
+}
+
+bool NewBar()
+{
+   datetime timeNow =  iTime(NULL, PERIOD_M1, 0);
+   if (time0 == timeNow) return(false);
+   time0 = timeNow;
+   return (true);
+}
+
+void InitializeTrackingFile()
+{
+ datetime currentTime = TimeCurrent();
+   trackingFileName = TimeYear(currentTime) + "-" +StringSubstr( (100 +TimeMonth(currentTime))+ "", 1) + "-" + StringSubstr((100 + TimeDay(currentTime))+ "", 1) + ".CSV";
+   trackingFileHandle = FileOpen(trackingFileName,  FILE_READ | FILE_WRITE | FILE_CSV, ',');
+   FileSeek(trackingFileHandle, 0, SEEK_END);
+   if (FileTell(trackingFileHandle) == 0) // new file
+   {
+      //Write out a header
+      FileWrite(trackingFileHandle,
+          "TicketNumber"
+          , "Type"
+          , "Currency"
+          , "Entry Time"
+          , "Entry Time"
+          , "Entry Price"
+          , "Stop Loss"
+          , "Take Profit"
+          , "QT Entry Price"
+          , "ATR"
+          , "Slow MA"
+          , "Slow MA Shift 5"
+          , "Fast MA"
+          , "Fast MA Shift 5"
+          , "Closing Time"
+          , "Closing Time"
+          , "Closing Price"
+          , "Profit"
+          );
+      FileFlush(trackingFileHandle);
+   }
+
+}
+
+void RecordOrder(int ticketNumber)
+{
+   int ticketArrayIndex = nextOpenTicketNumber;
+   openTicketNumbers[nextOpenTicketNumber] = ticketNumber;
+   nextOpenTicketNumber++;
+   if (OrderSelect(ticketNumber, SELECT_BY_TICKET))
+   {
+      openTime[ticketArrayIndex] = OrderOpenTime();
+      openPrice[ticketArrayIndex] = OrderOpenPrice();
+      tradeSL[ticketArrayIndex] = 0.0;
+      tradeTP[ticketArrayIndex] = 0.0;
+      openATR[ticketArrayIndex] = atrInPips;
+      openFastMA[ticketArrayIndex] = iMA(NULL, PERIOD_M1, FastMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
+      openFastMAShift5[ticketArrayIndex] = iMA(NULL, PERIOD_M1, FastMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 6);
+      openSlowMA[ticketArrayIndex] = iMA(NULL, PERIOD_M1, SlowMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
+      openSlowMAShift5[ticketArrayIndex] = iMA(NULL, PERIOD_M1, SlowMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 6);
+      openQTEntryPrice[ticketArrayIndex] = QuietTimeEntryPrice;     
+      closeTime[ticketArrayIndex] = 0;
+      closePrice[ticketArrayIndex] = 0.0;
+      orderType[ticketArrayIndex] = OrderType();
+      orderProfit[ticketArrayIndex] = 0;
+   }
+}
+
+void WriteCurrentOrder(int ticketIndex)
+{
+   int ticketArrayIndex = ticketIndex;
+   if (trackingFileHandle == 0) InitializeTrackingFile();
+   string orderT = "BUY";
+   if (orderType[ticketArrayIndex] == OP_SELL) orderT = "SELL";
+   double profit = 0.0;
+   if (closePrice[ticketArrayIndex] != 0.0) profit = closePrice[ticketArrayIndex] - openPrice[ticketArrayIndex];
+   if (orderType[ticketArrayIndex] == OP_SELL) profit = -profit;
+      FileWrite(trackingFileHandle,
+          openTicketNumbers[ticketArrayIndex]  //"TicketNumber"
+          , orderT
+          , Symbol()
+          , openTime[ticketArrayIndex] // "Entry Time"
+          , TimeToStr(openTime[ticketArrayIndex])
+          , openPrice[ticketArrayIndex] //"Entry Price"
+          , tradeSL[ticketArrayIndex]  //"Stop Loss"
+          , tradeTP[ticketArrayIndex]  //"Take Profit"
+          , openQTEntryPrice[ticketArrayIndex]  //"QT Entry Price"
+          , openATR[ticketArrayIndex] // "ATR"
+          , openSlowMA[ticketArrayIndex] //"Slow MA"
+          , openSlowMAShift5[ticketArrayIndex] //"Slow MA Shift 5"
+          , openFastMA[ticketArrayIndex] //"Fast MA"
+          , openFastMAShift5[ticketArrayIndex] //"Fast MA Shift 5"
+          , closeTime[ticketArrayIndex]
+          , TimeToStr(closeTime[ticketArrayIndex])
+          , closePrice[ticketArrayIndex]
+          , profit
+          );
+      FileFlush(trackingFileHandle);
+   
+}
+

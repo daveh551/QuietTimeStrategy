@@ -21,4 +21,8 @@ tester/
 experts/libraries/CheckAccountType.dll
 experts/Quiet Time Strategy.log
 experts/ZUP_v110.mq4
+*.dat
+experts/files/
+experts/presets/
+experts/libraries/MyfxbookEA.dll
 
