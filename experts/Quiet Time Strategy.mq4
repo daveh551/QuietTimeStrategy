@@ -48,6 +48,9 @@ color TextColor=Goldenrod;
 string TextFont="Verdana";
 int debug = true;
 bool HeartBeat = true;
+int DEBUG_STARTUP = 1;
+int DEBUG_ORDERARRAY=2;
+int DEBUG_GLOBALVARIABLES = 4;
 double QuietTimeEntryPrice = 0.00;   // The bid price at the start of quiet time.
 double HighTrigger;
 double LowTrigger;
@@ -493,6 +496,7 @@ int TradesOpen()
                }
             }
          }
+         nextOpenTicketNumber--;
       }
    //Print("Entering TradesOpen(). totalOrderCount = ", totalOrdersCount);
    for ( ix = 0; ix < totalOrdersCount; ix++)
@@ -713,6 +717,10 @@ void RecordOrder(int ticketNumber)
    int ticketArrayIndex = nextOpenTicketNumber;
    openTicketNumbers[nextOpenTicketNumber] = ticketNumber;
    nextOpenTicketNumber++;
+   if (debug & DEBUG_ORDERARRAY != 0)
+   {
+      Print("Recording open order[", ticketArrayIndex, "] for ticket ", ticketNumber);
+   }
    if (OrderSelect(ticketNumber, SELECT_BY_TICKET))
    {
       openTime[ticketArrayIndex] = OrderOpenTime();
@@ -792,7 +800,7 @@ void SetGV(string VarName,double VarVal)
    string strVarName = StringConcatenate(Prefix,Symbol(),"_",VarName);
 
    GlobalVariableSet(strVarName,VarVal);
-   if(debug > 0)
+   if(debug & DEBUG_GLOBALVARIABLES != 0)
       Print("###Set GV ",strVarName," Value=",VarVal);
    } //void SetGV
 
@@ -804,7 +812,7 @@ double GetGV(string VarName)
    if(GlobalVariableCheck(strVarName))
       {
       VarVal = GlobalVariableGet(strVarName);
-      if(debug> 0)
+      if(debug & DEBUG_GLOBALVARIABLES != 0)
          Print("###Get GV ",strVarName," Value=",VarVal);
       }
 
