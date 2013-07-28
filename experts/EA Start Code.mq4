@@ -164,6 +164,10 @@ int start()
   //----
    if(HeartBeat)
       HeartBeat();
+   if(GlobalVariableCheck(StringConcatenate(Prefix,"debug")))
+      {
+      debug = GlobalVariableGet(StringConcatenate(Prefix,"debug"))
+      }
   //----
    return(0);
    }  //int start()

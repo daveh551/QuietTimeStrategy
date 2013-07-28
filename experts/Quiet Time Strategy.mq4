@@ -6,7 +6,13 @@
 #property copyright "Dave Hanna"
 #property link      "http://nohypeforexrobotreview.com"
 #include <Assert.mqh>
+#include <stdlib.mqh>
+#include <stderror.mqh> 
 #include <PcntTradeSize.mqh>
+string Title = "Quiet Time Stategy";
+string Prefix="QTS_";
+string Version = "v0.1.2";
+
 //--- input parameters
 extern string  TimesInfo="These times should be set (in 24 Hour time) for your local timezone";
 extern string  TimesInfo2="They should correspond to 3:00PM and 7:00PM New York Time";
@@ -33,6 +39,15 @@ extern int       SlowMAPeriod = 10;
 extern int       FastMAPeriod = 3;
 
 //Global variables
+int FiveDig;
+int LotDigits;
+bool MarginAlert=false;
+double AdjPoint;
+static datetime LastTradeTime=0;
+color TextColor=Goldenrod;
+string TextFont="Verdana";
+int debug = true;
+bool HeartBeat = true;
 double QuietTimeEntryPrice = 0.00;   // The bid price at the start of quiet time.
 double HighTrigger;
 double LowTrigger;
@@ -58,8 +73,6 @@ double closePrice[30];
 int orderType[30];
 double orderProfit[30];
 int nextOpenTicketNumber = 0;
-int Digit5 = 1;
-string version = "v0.1.1";
 string trackingFileName;
 int trackingFileHandle;
 //Per bar values
@@ -72,14 +85,29 @@ double barLow;
 //+------------------------------------------------------------------+
 int init()
   {
-   Print("Initializing QuietTimeTrader ", version);
+   //----
+   Print("---------------------------------------------------------");
+   Print("-----",Title," ",Version," Initializing ",Symbol(),"-----"); 
+   if(Digits==5||Digits==3)
+      FiveDig = 10;
+   else
+      FiveDig = 1;
+   AdjPoint = Point * FiveDig;
+   DrawVersion(); 
+
+   if(MarketInfo(Symbol(),MODE_LOTSTEP) < 0.1)
+      LotDigits = 2;
+   else if(MarketInfo(Symbol(),MODE_LOTSTEP) < 1.0)
+      LotDigits = 1;
+   else
+      LotDigits = 0;
+
+   CheckGlobals();
+  //---------------------------------------------------- 
 //----
    if (Testing)
       RunTests();
    CalculateBrokerTimes();
-   if (Digits == 5 || Digits == 3) 
-      Digit5 = 10;
-   else Digit5 = 1;
    ClearTicketNumbers();
    
    InitializeTrackingFile();  
@@ -102,8 +130,10 @@ int deinit()
          FileClose(trackingFileHandle);
          trackingFileHandle = 0;
       }
-      if (ObjectFind("TRADEWINDOW") != -1)
-         ObjectDelete("TRADEWINDOW");
+   //----
+   DeleteAllObjects();
+
+   //----
 //----
    return(0);
   }
@@ -112,6 +142,12 @@ int deinit()
 //+------------------------------------------------------------------+
 int start()
   {
+
+   if (NewBar())
+      CheckGlobals();
+   if(HeartBeat)
+      HeartBeat();
+        
    if (serverOffsetFromLocal == -1)
    {
       CalculateBrokerTimes();   
@@ -125,8 +161,8 @@ int start()
    if (QuietTimeEntryPrice == 0.00)
    {
       QuietTimeEntryPrice = GetQuietTimeEntryPrice();
-      HighTrigger = QuietTimeEntryPrice + TriggerPipsFromQTEntry * Digit5 * Point;
-      LowTrigger = QuietTimeEntryPrice - TriggerPipsFromQTEntry * Digit5 * Point;
+      HighTrigger = QuietTimeEntryPrice + TriggerPipsFromQTEntry * FiveDig * Point;
+      LowTrigger = QuietTimeEntryPrice - TriggerPipsFromQTEntry * FiveDig * Point;
       Print("QuietTimeEntryPrice = ", DoubleToStr(QuietTimeEntryPrice, Digits), ", HighTrigger= ", DoubleToStr(HighTrigger, Digits), ", LowTrigger= ", DoubleToStr(LowTrigger, Digits));
           MakeTradeWindow(brokerQTStart,brokerQTEnd, LowTrigger, HighTrigger);
     }
@@ -237,7 +273,7 @@ int ShouldTrade(double bid, double ask)
    int result = 0;
    if (Ask < LowTrigger) result = 1; // execute a Buy trade
    if (Bid > HighTrigger) result = -1; // execute a Sell Trade
-   if (result != 0 && (ask -bid + Point/2) >= (MaximumSpread * Digit5 * Point)) 
+   if (result != 0 && (ask -bid + Point/2) >= (MaximumSpread * FiveDig * Point)) 
    {
       Print("Would have executed a trade, but spread is too wide: ", ask-bid, ", Max spread=", MaximumSpread, ", Point=", DoubleToStr(Point, Digits));
       result = 0;
@@ -262,7 +298,7 @@ int PlaceTrade(int tradeType, string symbol)
    bool ModifyResult;
 
    double spreadInPoints = (Ask - Bid)/Point;
-   double stopLossRisk = StopLossPips + spreadInPoints/Digit5;
+   double stopLossRisk = StopLossPips + spreadInPoints/FiveDig;
    Print("Calculating lot size. SpreadInPoints= ", DoubleToStr(spreadInPoints, Digits), 
       ", Points= ", DoubleToStr(Point, Digits), 
       ", StopLossPips= ", StopLossPips, 
@@ -306,8 +342,8 @@ int PlaceTrade(int tradeType, string symbol)
 
 void CalculateTargets(double price, double spread, int tradeType, int stopLossPips, int targetPips, double& stopLossPrice, double& targetPrice)
 {
-   stopLossPrice = price - tradeType * stopLossPips * Digit5 * Point - tradeType * spread;
-   targetPrice = price + tradeType * targetPips * Digit5 * Point;   
+   stopLossPrice = price - tradeType * stopLossPips * FiveDig * Point - tradeType * spread;
+   targetPrice = price + tradeType * targetPips * FiveDig * Point;   
 } 
 
 bool SetTargets(int ticketNumber, double stopLossPrice, double takeProfitPrice)
@@ -591,10 +627,10 @@ bool CalculateTargetsReturnsSL()
 {
    double stopLoss =0.0;
    double takeProfit = 0.0;
-   Print ("Entering CalculateTargetsReturnsSL. Price=1.35931, spread = .0007, Digit5=", Digit5, ", Point=", DoubleToStr(Point, 5));
+   Print ("Entering CalculateTargetsReturnsSL. Price=1.35931, spread = .0007, FiveDig=", FiveDig, ", Point=", DoubleToStr(Point, 5));
 //void CalculateTargets(double price, double spread, int tradeType, int stopLossPips, int targetPips, double& stopLostPrice, double& targetPrice)
-//   stopLossPrice = price - tradeType * stopLossPips * Digit5 * Point - tradeType * spread;
-   Print ("tradeType * stopLossPips * Digit5 * Point =",  DoubleToStr(-1 * 12 * Digit5 * Point, 5));
+//   stopLossPrice = price - tradeType * stopLossPips * FiveDig * Point - tradeType * spread;
+   Print ("tradeType * stopLossPips * FiveDig * Point =",  DoubleToStr(-1 * 12 * FiveDig * Point, 5));
    Print ("tradeType * spread = ", DoubleToStr(-1 * 0.0007, 5));
    CalculateTargets(1.35931, 0.0007, -1, 12, 10, stopLoss, takeProfit);
    Print ("Calculate Targets returns stopLoss of ", DoubleToStr(stopLoss, 10));
@@ -605,8 +641,8 @@ bool CalculateTargetsReturnsTP()
 {
    double takeProfit =  0.0;
    double stopLoss = 0.0;
-   Print ("Entering CalculateTargetsReturnsTP. Price=1.35931, spread = .0007, Digit5=", Digit5, ", Point=", DoubleToStr(Point, 5));
-   // targetPrice = price + tradeType * targetPips * Digit5 * Point;   
+   Print ("Entering CalculateTargetsReturnsTP. Price=1.35931, spread = .0007, FiveDig=", FiveDig, ", Point=", DoubleToStr(Point, 5));
+   // targetPrice = price + tradeType * targetPips * FiveDig * Point;   
   CalculateTargets(1.35931, 0.0007, -1, 12, 10, stopLoss, takeProfit);
    Print ("Calculate Targets returns takeProfit of ", DoubleToStr(takeProfit, 10));
    return (Assert(NormalizeDouble(takeProfit,5) == 1.35831, "Wrong TakeProfit"));
@@ -626,7 +662,7 @@ void CalculateNewPerBarValues()
 {
    double atr = iATR(Symbol(), PERIOD_M1, ATRAveraging, 1);
    double atrInPoints = atr/Point;
-   atrInPips = atrInPoints/Digit5;
+   atrInPips = atrInPoints/FiveDig;
    Print("atr= ", DoubleToStr(atr, Digits), ", atrInPoints= ", DoubleToStr(atrInPoints, Digits), ", atrInPips= ", DoubleToStr(atrInPips, Digits));
 }
 
@@ -728,4 +764,86 @@ void WriteCurrentOrder(int ticketIndex)
       FileFlush(trackingFileHandle);
    
 }
+void DeleteAllObjects()
+   {
+   int objs = ObjectsTotal();
+   string name;
+   for(int cnt=ObjectsTotal()-1;cnt>=0;cnt--)
+      {
+      name=ObjectName(cnt);
+      if (StringFind(name,Prefix,0)>-1) 
+         ObjectDelete(name);
+      WindowRedraw();
+      }
+   } //void DeleteAllObjects()
 
+void DrawVersion()
+   {
+   string name;
+   name = StringConcatenate(Prefix,"Version");
+   ObjectCreate(name,OBJ_LABEL,0,0,0);
+   ObjectSetText(name,Version,8,TextFont,TextColor);
+   ObjectSet(name,OBJPROP_CORNER,2);
+   ObjectSet(name,OBJPROP_XDISTANCE,5);
+   ObjectSet(name,OBJPROP_YDISTANCE,2);
+   } //void DrawVersion()
+void SetGV(string VarName,double VarVal)
+   {
+   string strVarName = StringConcatenate(Prefix,Symbol(),"_",VarName);
+
+   GlobalVariableSet(strVarName,VarVal);
+   if(debug > 0)
+      Print("###Set GV ",strVarName," Value=",VarVal);
+   } //void SetGV
+
+double GetGV(string VarName)
+   {
+   string strVarName = StringConcatenate(Prefix,Symbol(),"_",VarName);
+   double VarVal = -99999999;
+
+   if(GlobalVariableCheck(strVarName))
+      {
+      VarVal = GlobalVariableGet(strVarName);
+      if(debug> 0)
+         Print("###Get GV ",strVarName," Value=",VarVal);
+      }
+
+   return(VarVal); 
+   } //double GetGV(string VarName)
+
+void HeartBeat(int TimeFrame=PERIOD_H1)
+   {
+   static datetime LastHeartBeat;
+   datetime CurrentTime;
+
+   if(GlobalVariableCheck(StringConcatenate(Prefix,"HeartBeat")))
+      {
+      if(GlobalVariableGet(StringConcatenate(Prefix,"HeartBeat")) == 1)
+         HeartBeat = true;
+      else
+         HeartBeat = false;
+   }  //void HeartBeat(int TimeFrame=PERIOD_H1)
+
+   if(HeartBeat)
+      { 
+      CurrentTime = iTime(NULL,TimeFrame,0);
+      if(CurrentTime > LastHeartBeat)
+         {
+         Print(Version," HeartBeat ",TimeToStr(TimeCurrent(),TIME_DATE|TIME_MINUTES));
+         LastHeartBeat = CurrentTime;
+         } //if(CurrentTime > ...
+      } //if(HeartBeat)
+
+   } //HeartBeat()
+void CheckGlobals()
+{
+   if(GlobalVariableCheck(StringConcatenate(Prefix,"debug")))
+      {
+      debug = GlobalVariableGet(StringConcatenate(Prefix,"debug"));
+      }
+
+   if(GlobalVariableCheck(StringConcatenate(Prefix,"HeartBeat")))
+      {
+      HeartBeat = GlobalVariableGet(StringConcatenate(Prefix,"HeartBeat"));
+      }
+}
