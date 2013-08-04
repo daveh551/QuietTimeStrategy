@@ -11,7 +11,7 @@
 #include <PcntTradeSize.mqh>
 string Title = "Quiet Time Stategy";
 string Prefix="QTS_";
-string Version = "v0.1.2";
+string Version = "v0.1.4";
 
 //--- input parameters
 extern string  TimesInfo="These times should be set (in 24 Hour time) for your local timezone";
@@ -51,6 +51,7 @@ bool HeartBeat = true;
 int DEBUG_STARTUP = 1;
 int DEBUG_ORDERARRAY=2;
 int DEBUG_GLOBALVARIABLES = 4;
+int DEBUG_ORDERCLOSING = 8;
 double QuietTimeEntryPrice = 0.00;   // The bid price at the start of quiet time.
 double HighTrigger;
 double LowTrigger;
@@ -59,12 +60,13 @@ datetime brokerQTEnd;
 datetime brokerQTTerminate;
 int serverOffsetFromLocal = -1;
 datetime serverFirstBar = 0;
-int nextOrderNumber;
+
 int openTicketNumbers[30];
 datetime openTime[30];
 double openPrice[30];
 double tradeSL[30];
 double tradeTP[30];
+double lots[30];
 double openATR[30];
 double openFastMA[30];
 double openFastMAShift5[30];
@@ -83,6 +85,7 @@ datetime time0;
 double atrInPips;
 double barHigh;
 double barLow;
+#include "RunTests.mq4"
 //+------------------------------------------------------------------+
 //| expert initialization function                                   |
 //+------------------------------------------------------------------+
@@ -184,54 +187,20 @@ int start()
       double stopLossPrice, targetPrice;
       CalculateTargets(price, spread, typeTrade, StopLossPips, TargetPips, stopLossPrice, targetPrice );
       if (!StealthMode)
-         SetTargets(ticketNumber, stopLossPrice, targetPrice);
+         if (SetTargets(ticketNumber, stopLossPrice, targetPrice))
+         {
+            RecordTrade(ticketNumber);
+         }
+      else
+      {
+         RecordTrade(ticketNumber, stopLossPrice, targetPrice);
+      }
    }
 //----
    return(0);
   }
 //+------------------------------------------------------------------+
 
-void RunTests()
-{
-
-   int totalTests = 0;
-   int testsPassed = 0;
-   
-   Print("Beginning Unit Tests");
-   // Run the individual tests
-
-   if (CanCalculateBrokerStartTime())
-      testsPassed++;
-   totalTests++;
-   if (CanCalculateBrokerEndTime())
-      testsPassed++;
-   totalTests++;  
-   if (CanCalculateBrokerTermTime())
-      testsPassed++;
-   totalTests++;  
-   if (BeforeWindowReturnsFalse())
-      testsPassed++;
-   totalTests++;
-   if (InWindowReturnsTrue())
-      testsPassed++;
-   totalTests++;
-   if (AfterWindowReturnsFalse())
-      testsPassed++;
-   totalTests++;
-   if (AfterTermBumpsWindowTimes())
-      testsPassed++;
-   totalTests++;
-   if (CalculateTargetsReturnsSL())
-      testsPassed++;
-   totalTests++;
-   if (CalculateTargetsReturnsTP())
-      testsPassed++;
-   totalTests++;
-   
-   Print("Completed tests. ", testsPassed, " of ", totalTests, " passed.");
-   
- 
-}
 
 
 
@@ -366,20 +335,24 @@ bool SetTargets(int ticketNumber, double stopLossPrice, double takeProfitPrice)
                                     NormalizeDouble(takeProfitPrice,Digits),0);
          }
          Print("Modifying order for SL=", DoubleToStr(stopLossPrice,Digits), ", TP=", DoubleToStr(takeProfitPrice, Digits));                                    
-         if(ModifyResult)
-         {
-            if (OrderSelect(ticketNumber, SELECT_BY_TICKET))
-            {
-               tradeSL[nextOpenTicketNumber -1] = OrderStopLoss();
-               tradeTP[nextOpenTicketNumber -1] = OrderTakeProfit();
-               WriteCurrentOrder(nextOpenTicketNumber - 1);
-            }
-         }
+         if(!ModifyResult)
          {
             int err = GetLastError();
             Alert("Stop Loss and Take Profit not set on order ",ticketNumber, " Error = ", err);
             Print ("Error ", err, " returned from OrderModify");
          }  //if(Ticket >= 0)
+         return (ModifyResult);
+}
+void RecordTrade(int ticketNumber, double stopLoss = 0.0, double takeProfit = 0.0)
+{
+              if (OrderSelect(ticketNumber, SELECT_BY_TICKET))
+            {
+               if (stopLoss == 0.0) tradeSL[nextOpenTicketNumber -1] = OrderStopLoss();
+               else tradeSL[nextOpenTicketNumber-1] = stopLoss;
+               if (takeProfit == 0.0) tradeTP[nextOpenTicketNumber -1] = OrderTakeProfit();
+               else tradeTP[nextOpenTicketNumber -1] = takeProfit;
+               WriteCurrentOrder(nextOpenTicketNumber - 1);
+            }
 }
 void CalculateBrokerTimes()
 {
@@ -407,41 +380,6 @@ void CalculateBrokerTimes()
 }
 
 
-bool CanCalculateBrokerStartTime()
-{
-   Print("Starting CanCalculateBrokerStartTime()");
-   SetupBrokerTestTimes();
-   return (Assert(TimeToStr(brokerQTStart, TIME_MINUTES) == "15:00", "Wrong start time"));   
-}
-
-void SetupBrokerTestTimes()
-{
-   string saveQuietTimeStart = QuietTimeStart;
-   string saveQuietTimeEnd = QuietTimeEnd;
-   string saveQuietTimeTerminate = QuietTimeTerminate;
-   QuietTimeStart = "14:00";
-   QuietTimeEnd = "18:00";
-   QuietTimeTerminate = "01:00";
-   CalculateBrokerTimes();
-   QuietTimeStart = saveQuietTimeStart;
-   QuietTimeEnd = saveQuietTimeEnd;
-   QuietTimeTerminate = saveQuietTimeTerminate;
-}
-
-bool CanCalculateBrokerEndTime()
-{
-   Print("Starting CanCalculateBrokerEndTime()");
-   SetupBrokerTestTimes();
-   return (Assert(TimeToStr(brokerQTEnd, TIME_MINUTES) == "19:00", "Wrong end time"));   
-}
-
-bool CanCalculateBrokerTermTime()
-{
-   Print("Starting CanCalculateBrokerTermTime()");
-   SetupBrokerTestTimes();
-   Print("CanCalculateBrokerTermTime. brokerQTTerminate= ", TimeToStr(brokerQTTerminate, TIME_MINUTES));
-   return (Assert(TimeToStr(brokerQTTerminate, TIME_MINUTES) == "02:00", "Wrong termination time"));   
-}
 
 int TradesOpen()
 { 
@@ -518,14 +456,108 @@ int TradesOpen()
 
 bool ManageOpenTrade(datetime serverTime)
 {
-   // For now, we're assuming Stop Loss and TP are set on the trade.
-   // All we have to worry about is closing the trade at QTTerminate
+   
    if (serverTime >= brokerQTTerminate)
    {
       CloseOpenOrders();
       return (false);
    }
+   for (int ix= 0; ix < nextOpenTicketNumber; ix++)
+   {
+      bool orderStopped = CloseOrderIfAtStopLoss(ix);
+      if (IsMainOrder(ix))
+      {
+         bool orderProfit = CloseOrderIfAtTakeProfit(ix);
+         
+      }
+   }
    return (true); // orders remain open, so don't attempt to enter a new one. 
+}
+
+bool CloseOrderIfAtStopLoss(int orderIndex)
+{
+/*
+   if (ShouldClose(orderIndex, Bid, Ask, tradeSL[orderIndex]))
+   {
+      if (!CloseOrder(orderIndex, Red, "stop loss"))
+      {
+      	 HandleCloseError(orderIndex);
+      }
+      return (true);
+   }
+*/   
+   return (false);
+   
+}
+bool ShouldClose(int orderIndex, double bid, double ask, double triggerPrice)
+{
+
+   double priceToClose;
+   int comparison;
+   if (orderType[orderIndex] == OP_SELL) 
+   {
+      priceToClose = ask;
+      if (openPrice[orderIndex] > triggerPrice) // then this is take profit
+         comparison = -1;
+      else
+         comparison = 1;
+   }
+   else
+   {
+       priceToClose = bid;
+       if (openPrice[orderIndex] < triggerPrice) // then this is take profit
+          comparison = 1;
+       else
+       	  comparison = -1;
+   }
+   
+	if (debug & DEBUG_ORDERCLOSING != 0)
+ 	Print("ShouldClose, orderType=", orderType[orderIndex], ", priceToClose = ",
+		DoubleToStr(priceToClose, Digits),
+		", triggerPrice = ", DoubleToStr(triggerPrice, Digits),
+		", comparison= ", comparison,
+		", entryPrice = ", DoubleToStr(openPrice[orderIndex], Digits));
+   return ((priceToClose - triggerPrice)*comparison >= 0);
+}
+bool IsMainOrder(int orderIndex)
+{
+   return (true);
+}
+
+bool CloseOrderIfAtTakeProfit(int orderIndex)
+{
+   if (ShouldClose(orderIndex, Bid, Ask, tradeTP[orderIndex]))
+   {
+   	if (!CloseOrder(orderIndex, Blue, "take profit"))
+	  {
+	    HandleCloseError(orderIndex);
+   	}
+	  return(true);
+
+   }
+   return (false);
+   
+}
+
+bool CloseOrder(int orderIndex, color ArrowColor, string action)
+{
+      double priceToClose = Bid;
+      if (orderType[orderIndex] == OP_SELL) priceToClose = Ask;
+      if (debug & DEBUG_ORDERCLOSING != 0)
+      {
+         Print ("Closing order ", openTicketNumbers[orderIndex], " by ", action, " at ", DoubleToStr(priceToClose, Digits), " TP price = ", DoubleToStr(tradeTP[orderIndex], Digits));
+      }
+      bool result = OrderClose(openTicketNumbers[orderIndex], lots[orderIndex], priceToClose, 3, ArrowColor);
+      return (result);
+}
+
+void HandleCloseError(int orderIndex)
+{
+	int errorNumber = GetLastError();
+	Alert("Order ", openTicketNumbers[orderIndex], " failed to close: Error ", 
+		ErrorDescription(errorNumber));
+	Print("ERROR: Order", openTicketNumbers[orderIndex], " failed to close. Error = ", errorNumber, " (",
+		ErrorDescription(errorNumber), ")");
 }
 
 void CloseOpenOrders()
@@ -566,45 +598,6 @@ int FindServerOffset()
    return (-1);
 }
 
-//Time Window tests
-bool BeforeWindowReturnsFalse()
-{
-   Print ("Beginning BeforeWindowReturnsFalse()");
-   SetupBrokerTestTimes();
-   return (Assert(!TimeWindowToTrade(StrToTime(StringConcatenate(TimeToStr(TimeLocal(), TIME_DATE), " 10:00"))), "TimeToTradeWindow(10:00) returned true"));
-   
-}
-
-bool InWindowReturnsTrue()
-{
-   Print ("Beginning InWindowReturnsTrue()");
-   SetupBrokerTestTimes();
-   return (Assert(TimeWindowToTrade(StrToTime(StringConcatenate(TimeToStr(TimeLocal(), TIME_DATE), " 16:00"))), "TimeToTradeWindow(16:00) returned false"));
-   
-}
-
-bool AfterWindowReturnsFalse()
-{
-   Print ("Beginning AfterWindowReturnsFalse()");
-   SetupBrokerTestTimes();
-   return (Assert(!TimeWindowToTrade(StrToTime(StringConcatenate(TimeToStr(TimeLocal(), TIME_DATE), " 20:00"))), "TimeToTradeWindow(20:00) returned true"));
-}
-
-bool AfterTermBumpsWindowTimes()
-{
-   Print ("Beginning AfterTermBumpsWindowTimes()");
-   SetupBrokerTestTimes();
-   datetime startingQTStart = brokerQTStart;
-   datetime startingQTEnd = brokerQTEnd;
-   datetime startingQTTerminate = brokerQTTerminate;
-   bool windowResult = TimeWindowToTrade(StrToTime(StringConcatenate(TimeToStr(TimeLocal() + 86400, TIME_DATE), " 03:00")));
-   return (Assert (!windowResult, "TimeToTrade after terminate returned true") &&
-      Assert (brokerQTStart == startingQTStart + 86400, "BrokerQTStart not bumped") &&
-      Assert (brokerQTEnd == startingQTEnd + 86400, "BrokerQTEnd not bumped") &&
-      Assert (brokerQTTerminate == startingQTTerminate + 86400, "BrokerQTTerminate not bumped"));
-    return (false); 
-}
-
 void MakeTradeWindow(datetime start, datetime end, double lowPrice, double highPrice)
 {
    if (ObjectFind("TRADEWINDOW") == -1)
@@ -625,31 +618,6 @@ void ClearTicketNumbers()
    for (int ix=0; ix <= ArrayRange(openTicketNumbers, 0); ix++)
       openTicketNumbers[ix] = 0;
    nextOpenTicketNumber = 0;      
-}
-
-bool CalculateTargetsReturnsSL()
-{
-   double stopLoss =0.0;
-   double takeProfit = 0.0;
-   Print ("Entering CalculateTargetsReturnsSL. Price=1.35931, spread = .0007, FiveDig=", FiveDig, ", Point=", DoubleToStr(Point, 5));
-//void CalculateTargets(double price, double spread, int tradeType, int stopLossPips, int targetPips, double& stopLostPrice, double& targetPrice)
-//   stopLossPrice = price - tradeType * stopLossPips * FiveDig * Point - tradeType * spread;
-   Print ("tradeType * stopLossPips * FiveDig * Point =",  DoubleToStr(-1 * 12 * FiveDig * Point, 5));
-   Print ("tradeType * spread = ", DoubleToStr(-1 * 0.0007, 5));
-   CalculateTargets(1.35931, 0.0007, -1, 12, 10, stopLoss, takeProfit);
-   Print ("Calculate Targets returns stopLoss of ", DoubleToStr(stopLoss, 10));
-   return (Assert(NormalizeDouble(stopLoss,5) == 1.36121, "Wrong StopLoss"));
-}
-
-bool CalculateTargetsReturnsTP()
-{
-   double takeProfit =  0.0;
-   double stopLoss = 0.0;
-   Print ("Entering CalculateTargetsReturnsTP. Price=1.35931, spread = .0007, FiveDig=", FiveDig, ", Point=", DoubleToStr(Point, 5));
-   // targetPrice = price + tradeType * targetPips * FiveDig * Point;   
-  CalculateTargets(1.35931, 0.0007, -1, 12, 10, stopLoss, takeProfit);
-   Print ("Calculate Targets returns takeProfit of ", DoubleToStr(takeProfit, 10));
-   return (Assert(NormalizeDouble(takeProfit,5) == 1.35831, "Wrong TakeProfit"));
 }
 
 bool ATRFilter()
@@ -725,6 +693,7 @@ void RecordOrder(int ticketNumber)
    {
       openTime[ticketArrayIndex] = OrderOpenTime();
       openPrice[ticketArrayIndex] = OrderOpenPrice();
+      lots[ticketArrayIndex] = OrderLots();
       tradeSL[ticketArrayIndex] = 0.0;
       tradeTP[ticketArrayIndex] = 0.0;
       openATR[ticketArrayIndex] = atrInPips;
