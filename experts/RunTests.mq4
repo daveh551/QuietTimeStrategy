@@ -74,9 +74,6 @@ void RunTests()
 	if (ShldClsTPriceHiTakeProfit())
 		testsPassed++;
 	totalTests++;
-	if (ShldClsFSpreadSplittingSL())
-		testsPassed++;
-	totalTests++;
 	if (ShldClsFSpreadSplittingTP())
 		testsPassed++;
 	totalTests++;
@@ -87,9 +84,6 @@ void RunTests()
 		testsPassed++;
 	totalTests++;
 	if (SShldClsTPriceLowerTP())
-		testsPassed++;
-	totalTests++;
-	if (SShldClsFSpreadSplittingSL())
 		testsPassed++;
 	totalTests++;
 	if (SShldClsFSpreadSplittingTP())
@@ -221,14 +215,14 @@ bool ShldClsTPriceLowThanStopLoss()
 /* Scenario - Buy EURCAD at 1.3523
 /*            Stop at 1.3511
 /*            TP at 1.3533
-/*            Bid at 1.3509
-/*            Ask at 1.3511
+/*            Bid at 1.35109
+/*            Ask at 1.3512
 /*  ShouldClose should return true  
 /*******************************************/
 {
 	Print ("Entering ShouldCloseReturnsTrueForPriceLowerThanStopLoss");
 	SetupTrade(OP_BUY);
-	bool result = ShouldClose(0, 1.3509, 1.3511, 1.3511);
+	bool result = ShouldClose(0, 1.35109, 1.3512, 1.3511);
 	return (Assert(result , "ShouldClose returned false instead of true"));
 }
 bool ShldClsTPriceHiTakeProfit()
@@ -243,23 +237,8 @@ bool ShldClsTPriceHiTakeProfit()
 {
 	Print ("Entering ShouldCloseReturnsTrueForPriceHigherThanTakeProfit");
 	SetupTrade(OP_BUY);
-	bool result = ShouldClose(0, 1.3533, 1.3535, 1.3533);
+	bool result = ShouldClose(0, 1.35331, 1.3535, 1.3533);
 	return (Assert(result , "ShouldClose returned false instead of true"));
-}
-bool ShldClsFSpreadSplittingSL()
-/*******************************************/
-/* Scenario - Buy EURCAD at 1.3523
-/*            Stop at 1.3511
-/*            TP at 1.3533
-/*            Bid at 1.3510
-/*            Ask at 1.3512
-/*  ShouldClose should return false  
-/*******************************************/
-{
-	Print ("Entering ShouldCloseReturnsFalseForSpreadSplittingSL");
-	SetupTrade(OP_BUY);
-	bool result = ShouldClose(0, 1.3510, 1.3512, 1.3511);
-	return (Assert(result==false , "ShouldClose returned true instead of false"));
 }
 bool ShldClsFSpreadSplittingTP()
 /*******************************************/
@@ -273,8 +252,8 @@ bool ShldClsFSpreadSplittingTP()
 {
 	Print ("Entering ShouldCloseReturnsFalseForSpreadSplittingTakeProfit");
 	SetupTrade(OP_BUY);
-	bool result = ShouldClose(0, 1.3531, 1.3533, 1.3533);
-	return (Assert(result , "ShouldClose returned true instead of false"));
+	bool result = ShouldClose(0, 1.3532, 1.3534, 1.3533);
+	return (Assert(result==false , "ShouldClose returned true instead of false"));
 }
 bool SShldClseFPriceBetweenTargets()
 {
@@ -304,7 +283,7 @@ bool SShldClsTPriceHiStopLoss()
 {
 	Print ("Entering Sell_ShouldCloseReturnsTrueForPriceHigherThanStopLoss");
 	SetupTrade(OP_SELL);
-	bool result = ShouldClose(0, 1.3535, 1.3537, 1.3535);
+	bool result = ShouldClose(0, 1.3533, 1.35351, 1.3535);
 	return (Assert(result , "ShouldClose returned false instead of true"));
 }
 bool SShldClsTPriceLowerTP()
@@ -319,23 +298,8 @@ bool SShldClsTPriceLowerTP()
 {
 	Print ("Entering Sell_ShouldCloseReturnsTrueForPriceHigherThanTakeProfit");
 	SetupTrade(OP_SELL);
-	bool result = ShouldClose(0, 1.3511, 1.3513, 1.3513);
+	bool result = ShouldClose(0, 1.3511, 1.35129, 1.3513);
 	return (Assert(result , "ShouldClose returned false instead of true"));
-}
-bool SShldClsFSpreadSplittingSL()
-/*******************************************/
-/* Scenario - SELL EURCAD at 1.3523
-/*            Stop at 1.3535
-/*            TP at 1.3513
-/*            Bid at 1.3533
-/*            Ask at 1.3535
-/*  ShouldClose should return false  
-/*******************************************/
-{
-	Print ("Entering Sell_ShouldCloseReturnsFalseForSpreadSplittingSL");
-	SetupTrade(OP_SELL);
-	bool result = ShouldClose(0, 1.3533, 1.3535, 1.3535);
-	return (Assert(result==false , "ShouldClose returned true instead of false"));
 }
 bool SShldClsFSpreadSplittingTP()
 /*******************************************/
@@ -350,7 +314,7 @@ bool SShldClsFSpreadSplittingTP()
 	Print ("Entering Sell_ShouldCloseReturnsFalseForSpreadSplittingTakeProfit");
 	SetupTrade(OP_SELL);
 	bool result = ShouldClose(0, 1.3513, 1.3515, 1.3513);
-	return (Assert(result , "ShouldClose returned true instead of false"));
+	return (Assert(result == false, "ShouldClose returned true instead of false"));
 }
 
 void SetupTrade(int op)
